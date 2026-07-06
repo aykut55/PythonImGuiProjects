@@ -2,7 +2,8 @@ import locale
 import subprocess
 
 import dearpygui.dearpygui as dpg
-
+from src.config.configManager import ConfigManager
+from src.plotting.guiManager import GuiManager
 
 class App:
     def __init__(self):
@@ -14,13 +15,16 @@ class App:
             except locale.Error:
                 pass
 
+        self.configManager = ConfigManager()
+        window = self.configManager.get("window")
+
         dpg.create_context()
-        dpg.create_viewport(title="DearPyGuiDataPlotter", width=800, height=600)
+        dpg.create_viewport(title="DearPyGuiDataPlotter",
+                            width=window["width"], height=window["height"],
+                            x_pos=window["x_pos"], y_pos=window["y_pos"])
 
-        with dpg.window(label="Ana Pencere", tag="main_window"):
-            dpg.add_text("Hello World")
-
-        dpg.set_primary_window("main_window", True)
+        self.guiManager = GuiManager(self.configManager)
+        self.guiManager.build()
 
     def run(self):
         subprocess.call("cls", shell=True)
