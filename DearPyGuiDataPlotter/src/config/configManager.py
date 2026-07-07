@@ -15,6 +15,17 @@ class ConfigManager:
             "x_pos": 0,
             "y_pos": 0,
         },
+        "panels": {
+            "scriptPanel": {
+                "initialCoordinates": {"x": 1546, "y": 147, "width": 520, "height": 551},
+            },
+            "dataManager": {
+                "initialCoordinates": {"x": 1546, "y": 147, "width": 520, "height": 819},
+            },
+            "consolePanel": {
+                "initialCoordinates": {"x": 1546, "y": 705, "width": 520, "height": 261},
+            },
+        },
     }
 
     def __init__(self):

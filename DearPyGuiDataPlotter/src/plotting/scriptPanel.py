@@ -181,3 +181,10 @@ class ScriptPanel:
             dpg.set_item_pos(self.TAG, (x, y))
             dpg.set_item_width(self.TAG, width)
             dpg.set_item_height(self.TAG, height)
+
+    # ---- rightSlotPanels arayuzu (GuiManager, camelCase adlarla cagirir) ---
+    def isVisible(self):
+        return self.is_visible()
+
+    def setGeometry(self, x, y, width, height):
+        self.set_geometry(x, y, width, height)

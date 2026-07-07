@@ -18,6 +18,7 @@ class ConsolePanel:
     TAG = "console_panel"
     OUTPUT = "console_output"
     CLEAR_ON_DBLCLICK_CHECKBOX = "console_clear_on_dblclick"
+    ADD_INPUT = "console_add_input"
     HANDLER_REGISTRY = "console_panel_handlers"
     OUTPUT_HANDLER_REGISTRY = "console_output_handlers"
 
@@ -42,6 +43,8 @@ class ConsolePanel:
                 dpg.add_button(label="Copy", callback=self.copy)
                 dpg.add_checkbox(label="Clear On DblClick", tag=self.CLEAR_ON_DBLCLICK_CHECKBOX,
                                  default_value=False)
+                dpg.add_button(label="Add", callback=self._onAdd)
+                dpg.add_input_text(tag=self.ADD_INPUT, width=200, hint="Ayrac / metin...")
             dpg.add_input_text(tag=self.OUTPUT, multiline=True, readonly=True,
                                width=-1, height=-1, default_value=self._wrappedText())
 
@@ -63,6 +66,11 @@ class ConsolePanel:
     def _onOutputDoubleClick(self, sender, appData):
         if dpg.get_value(self.CLEAR_ON_DBLCLICK_CHECKBOX):
             self.clear()
+
+    def _onAdd(self):
+        text = dpg.get_value(self.ADD_INPUT) if dpg.does_item_exist(self.ADD_INPUT) else ""
+        self.write(text + "\n")
+        dpg.set_value(self.ADD_INPUT, "")
 
     def _onClose(self):
         self._visible = False

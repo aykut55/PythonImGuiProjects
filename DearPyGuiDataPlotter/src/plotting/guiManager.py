@@ -1,6 +1,7 @@
 import dearpygui.dearpygui as dpg
 
 from .consolePanel import ConsolePanel
+from .dataManager import DataManager
 from .menuBar import MenuBar
 from .scriptPanel import ScriptPanel
 
@@ -25,7 +26,8 @@ class GuiManager:
         self.configManager = configManager
         self.menuBar = MenuBar()
         self.scriptPanel = ScriptPanel()
-        self.rightSlotPanels = [self.scriptPanel]
+        self.dataManager = DataManager()
+        self.rightSlotPanels = [self.scriptPanel, self.dataManager]
         self.consolePanel = ConsolePanel()
         self.consolePanel.attachStdout()
         self.scriptPanel.set_on_open_console(self.consolePanel.show)
@@ -38,6 +40,7 @@ class GuiManager:
             on_destroy_layout=self.destroyLayout,
             on_toggle_script=self.toggleScript,
             on_toggle_console=self.consolePanel.toggle,
+            on_manage_data=self.toggleDataManager,
             on_command_query=self._onCommandQuery,
         )
         self.commands = [
@@ -46,6 +49,7 @@ class GuiManager:
             ("Destroy Layout", self.destroyLayout),
             ("Toggle Script Panel", self.toggleScript),
             ("Toggle Console Panel", self.consolePanel.toggle),
+            ("Toggle Data Manager", self.toggleDataManager),
         ]
 
     def build(self):
@@ -55,8 +59,8 @@ class GuiManager:
         dpg.set_primary_window("main_window", True)
         dpg.bind_item_theme("main_window", self._buildMenuBarHeightTheme())
 
-        consoleGeom = self._computeGeometry()["consolePanel"]
-        self.consolePanel.build(*consoleGeom["pos"], consoleGeom["width"], consoleGeom["height"])
+        c = self._panelInitialCoords("consolePanel")
+        self.consolePanel.build(c["x"], c["y"], c["width"], c["height"])
 
         self.buildLayout()
 
@@ -69,7 +73,9 @@ class GuiManager:
 
     def destroyLayout(self):
         dpg.delete_item(self.LAYOUT_ROOT, children_only=True)
-        for tag in (ScriptPanel.TAG, ScriptPanel.OPEN_DIALOG, ScriptPanel.SAVEAS_DIALOG):
+        for tag in (ScriptPanel.TAG, ScriptPanel.OPEN_DIALOG, ScriptPanel.SAVEAS_DIALOG,
+                   DataManager.TAG, DataManager.FILE_DIALOG, DataManager.TREE_HANDLER,
+                   DataManager.KEY_HANDLER):
             if dpg.does_item_exist(tag):
                 dpg.delete_item(tag)
 
@@ -95,12 +101,21 @@ class GuiManager:
         for tag in self.PANEL_TAGS:
             dpg.bind_item_theme(tag, self.panelTheme)
 
-        rightGeom = geometry["rightPanel"]
-        self.scriptPanel.build(*rightGeom["pos"], rightGeom["width"], rightGeom["height"],
+        s = self._panelInitialCoords("scriptPanel")
+        self.scriptPanel.build(s["x"], s["y"], s["width"], s["height"],
                                on_close=self._relayout)
         dpg.bind_item_theme(ScriptPanel.TAG, self.panelTheme)
 
+        d = self._panelInitialCoords("dataManager")
+        self.dataManager.build(d["x"], d["y"], d["width"], d["height"],
+                               onClose=self._relayout)
+        dpg.bind_item_theme(DataManager.TAG, self.panelTheme)
+
         dpg.set_viewport_resize_callback(self._relayout)
+
+    def _panelInitialCoords(self, panelName):
+        panels = self.configManager.get("panels") or {}
+        return panels.get(panelName, {}).get("initialCoordinates", {"x": 0, "y": 0, "width": 520, "height": 600})
 
     def _computeGeometry(self):
         vpW = dpg.get_viewport_width()
@@ -146,13 +161,17 @@ class GuiManager:
 
         rightGeom = geometry["rightPanel"]
         for panel in self.rightSlotPanels:
-            panel.set_geometry(*rightGeom["pos"], rightGeom["width"], rightGeom["height"])
+            panel.setGeometry(*rightGeom["pos"], rightGeom["width"], rightGeom["height"])
 
         consoleGeom = geometry["consolePanel"]
         self.consolePanel.setGeometry(*consoleGeom["pos"], consoleGeom["width"], consoleGeom["height"])
 
     def toggleScript(self):
         self.scriptPanel.toggle()
+        self._relayout()
+
+    def toggleDataManager(self):
+        self.dataManager.toggle()
         self._relayout()
 
     def _onCommandQuery(self, query):
@@ -185,7 +204,7 @@ class GuiManager:
         return runner
 
     def _isRightSlotOccupied(self):
-        return any(panel.is_visible() for panel in self.rightSlotPanels)
+        return any(panel.isVisible() for panel in self.rightSlotPanels)
 
     def _buildMenuBarHeightTheme(self):
         with dpg.theme() as menuBarHeightTheme:
