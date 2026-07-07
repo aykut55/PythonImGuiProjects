@@ -278,6 +278,8 @@ class App:
         # gercekten "sifirlandigini" hissetsin. Sonra sifirdan kur+ciz.
         pm.deleteAllPanels()
         pm.sync()
+        pool.clear()
+        gm.leftMenuPanel.refresh()
         dpg.split_frame()
 
         self.buildPanels()
