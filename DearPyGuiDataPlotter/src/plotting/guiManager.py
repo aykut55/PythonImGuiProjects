@@ -27,7 +27,11 @@ class GuiManager:
         self.menuBar = MenuBar()
         self.scriptPanel = ScriptPanel()
         self.dataManager = DataManager()
-        self.rightSlotPanels = [self.scriptPanel, self.dataManager]
+        # DataManager rightSlotPanels'te DEGIL: kullanici onu istedigi yere
+        # surukleyebilsin diye, sadece ilk build'de config'teki baslangic
+        # konumunu alir; ScriptPanel/ConsolePanel gibi viewport resize'da
+        # zorla eski konumuna geri alinmaz (bkz. _relayout).
+        self.rightSlotPanels = [self.scriptPanel]
         self.consolePanel = ConsolePanel()
         self.consolePanel.attachStdout()
         self.scriptPanel.set_on_open_console(self.consolePanel.show)

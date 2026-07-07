@@ -50,6 +50,26 @@ class DataManager:
     QUICK_THYAO_WIDTH = 140
     QUICK_VIP_WIDTH = 170
 
+    # First N Data / Last N Data / Index Range AYNI n1 kutusunu (dm_read_n1_input)
+    # paylasir; mod degistiginde kutu tek oldugu icin deger karisir (First N'e
+    # 5000 yaz, Last N'e gec 7000 yaz, First N'e don -> 7000 gorunur). Bunu
+    # onlemek icin her modun kendi degerini ayri hafizada (_modeValues) tutup
+    # mod degisiminde SADECE o modun kutusunu geri yukluyoruz.
+    MODE_FIELD_TAGS = {
+        "n1": "dm_read_n1_input",
+        "n2": "dm_read_n2_input",
+        "dt1": "dm_read_dt1_input",
+        "dt2": "dm_read_dt2_input",
+    }
+    MODE_FIELDS = {
+        "First N Data": ("n1",),
+        "Last N Data": ("n1",),
+        "Index Range": ("n1", "n2"),
+        "Start Date": ("dt1",),
+        "Stop Date": ("dt2",),
+        "Date Range": ("dt1", "dt2"),
+    }
+
     def __init__(self):
         self._visible = False
         self._onCloseCallback = None
@@ -75,6 +95,8 @@ class DataManager:
         self._editRow1Y = 0    # Read Mode alaninda Edit1/Edit2 satir y'leri (build() doldurur)
         self._editRow2Y = 0
         self._editX = 0        # Edit1/Edit2 sutun x'i (build() doldurur)
+        self._lastReadMode = "Full Data"
+        self._modeValues = {}  # {modeName: {"n1": ..., "n2": ..., "dt1": ..., "dt2": ...}}
 
     # ---- build ------------------------------------------------------------
     def build(self, x=0, y=0, width=520, height=820, onClose=None):
@@ -535,6 +557,11 @@ class DataManager:
 
     def _onReadModeChanged(self, sender=None, appData=None, userData=None):
         mode = dpg.get_value("dm_read_mode_combo") if dpg.does_item_exist("dm_read_mode_combo") else "Full Data"
+
+        # Cikilan moddaki kutu degerlerini hafizaya al (n1/dt1/dt2 birden fazla
+        # mod tarafindan PAYLASILDIGI icin, yoksa deger karisir).
+        self._saveModeValues(self._lastReadMode)
+
         showN1 = mode in ("First N Data", "Last N Data", "Index Range")
         showN2 = mode == "Index Range"
         showDt1 = mode in ("Start Date", "Date Range")
@@ -553,22 +580,30 @@ class DataManager:
             dt2Y = self._editRow1Y if mode == "Stop Date" else self._editRow2Y
             dpg.set_item_pos("dm_read_dt2_input", [self._editX, dt2Y])
 
-        self._seedReadModeInputs(mode)
+        # Girilen moda ait hafizadaki degeri geri yukle (varsa). Read/Read
+        # MetaData BU FONKSIYONU cagirmaz; sadece mod degisince calisir, o
+        # yuzden kullanicinin baska bir modda girdigi deger asla ezilmez.
+        self._restoreModeValues(mode)
+        self._lastReadMode = mode
 
-    def _seedReadModeInputs(self, mode=None):
-        mode = mode or (dpg.get_value("dm_read_mode_combo") if dpg.does_item_exist("dm_read_mode_combo") else "")
-        n = int(self._metaBarCount or 0)
-        if mode in ("First N Data", "Last N Data") and dpg.does_item_exist("dm_read_n1_input"):
-            dpg.set_value("dm_read_n1_input", min(1000, n) if n > 0 else 1000)
-        elif mode == "Index Range":
-            if dpg.does_item_exist("dm_read_n1_input"):
-                dpg.set_value("dm_read_n1_input", 0)
-            if dpg.does_item_exist("dm_read_n2_input"):
-                dpg.set_value("dm_read_n2_input", max(0, n - 1))
-        if mode in ("Start Date", "Date Range") and dpg.does_item_exist("dm_read_dt1_input"):
-            dpg.set_value("dm_read_dt1_input", self._metaStartDate)
-        if mode in ("Stop Date", "Date Range") and dpg.does_item_exist("dm_read_dt2_input"):
-            dpg.set_value("dm_read_dt2_input", self._metaStopDate)
+    def _saveModeValues(self, mode):
+        fields = self.MODE_FIELDS.get(mode, ())
+        if not fields:
+            return
+        values = self._modeValues.setdefault(mode, {})
+        for field in fields:
+            tag = self.MODE_FIELD_TAGS[field]
+            if dpg.does_item_exist(tag):
+                values[field] = dpg.get_value(tag)
+
+    def _restoreModeValues(self, mode):
+        values = self._modeValues.get(mode)
+        if not values:
+            return
+        for field, value in values.items():
+            tag = self.MODE_FIELD_TAGS[field]
+            if dpg.does_item_exist(tag):
+                dpg.set_value(tag, value)
 
     def _onClear(self):
         """'Clear': okunan datayi hafizadan siler, reader objesini birakir.
@@ -621,6 +656,7 @@ class DataManager:
         reader = StockDataReader()
         meta = reader.readMetaData(filePath)
         self._applyMetadataDefaults(meta)
+        self._seedReadModeInputs()
         lines = [
             f"Path   : {filePath}",
             f"Market : {self._selMarket}",
@@ -643,7 +679,26 @@ class DataManager:
         self._metaBarCount = self._metadataInt(meta, "BarCount")
         self._metaStartDate = self._metadataDate(meta, start=True)
         self._metaStopDate = self._metadataDate(meta, start=False)
-        self._seedReadModeInputs()
+
+    def _seedReadModeInputs(self):
+        """Read MetaData sonrasi HER moda kendi sensible varsayilanini
+        hafizaya (_modeValues) yazar: First N/Last N -> 1000, Index Range ->
+        0..BarCount-1 (tum dosya), Start/Stop/Date Range -> metadata'nin
+        baslangic/bitis tarihleri. Su an secili modun kutulari hemen
+        guncellenir; digerleri o moda gecilince hafizadan yuklenir. SADECE
+        Read MetaData'dan cagrilir - duz Read veya combo mod degisimi bunu
+        ASLA tetiklemez (kullanicinin sonradan girdigi degeri korumak icin)."""
+        barCount = int(self._metaBarCount or 0)
+        self._modeValues = {
+            "First N Data": {"n1": 1000},
+            "Last N Data": {"n1": 1000},
+            "Index Range": {"n1": 0, "n2": max(0, barCount - 1)},
+            "Start Date": {"dt1": self._metaStartDate},
+            "Stop Date": {"dt2": self._metaStopDate},
+            "Date Range": {"dt1": self._metaStartDate, "dt2": self._metaStopDate},
+        }
+        currentMode = dpg.get_value("dm_read_mode_combo") if dpg.does_item_exist("dm_read_mode_combo") else ""
+        self._restoreModeValues(currentMode)
 
     def _metadataInt(self, meta, wantedKey):
         if not meta:
