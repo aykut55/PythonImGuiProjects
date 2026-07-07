@@ -3,6 +3,9 @@ import dearpygui.dearpygui as dpg
 from .consolePanel import ConsolePanel
 from .dataManager import DataManager
 from .menuBar import MenuBar
+from .panel import Panel
+from .panelData import PanelData
+from .panelManager import PanelManager
 from .scriptPanel import ScriptPanel
 
 
@@ -21,6 +24,7 @@ class GuiManager:
     CONSOLE_HEIGHT = 261
     PANEL_PADDING = (10, 10)
     PANEL_TAGS = ("topPanel", "leftPanel", "centerPanel", "bottomPanel")
+    CENTER_TOP_HEIGHT = 150  # RangeSlider/HScrollBar icin ayrilan ust bant
 
     def __init__(self, configManager):
         self.configManager = configManager
@@ -35,6 +39,9 @@ class GuiManager:
         self.consolePanel = ConsolePanel()
         self.consolePanel.attachStdout()
         self.scriptPanel.set_on_open_console(self.consolePanel.show)
+        self.panelManager = PanelManager()
+        self.scriptPanel.set_globals(gm=self, pm=self.panelManager, Panel=Panel, PanelData=PanelData)
+        self._renderLoopStarted = False
         self.isDarkTheme = True
         self.lightTheme = self._buildLightTheme()
         self.panelTheme = self._buildPanelTheme()
@@ -67,6 +74,40 @@ class GuiManager:
         self.consolePanel.build(c["x"], c["y"], c["width"], c["height"])
 
         self.buildLayout()
+        self._startRenderLoop()
+
+    def _startRenderLoop(self):
+        """Render dongusunu baslatir. Tekrar baslatilirsa (build() ikinci kez
+        cagrilirsa) ust uste iki zincir olusmasin diye guard var."""
+        if self._renderLoopStarted:
+            return
+        self._renderLoopStarted = True
+        self._scheduleRenderLoop()
+
+    def _scheduleRenderLoop(self):
+        """self.render()'i her frame'de bir cagiran, kendini yeniden zamanlayan
+        surekli dongu. Uygulama acik oldugu surece calisir."""
+        dpg.set_frame_callback(dpg.get_frame_count() + 1, self._onRenderTick)
+
+    def _onRenderTick(self):
+        # try/except: render() icinde bir hata olursa dongu SESSIZCE durmasin
+        # (hatayi konsola yaz, zincire devam et) - normal isleyis bozulmasin.
+        try:
+            self.render()
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        self._scheduleRenderLoop()
+
+    def render(self):
+        """Her frame cagrilan ust-seviye render girisi. Su an alt bilesenlere
+        delege ediyor; ileride baska bilesenler eklendikce buraya eklenir."""
+        self.panelManager.render()
+
+    def sync(self):
+        """Model<->UI senkronunu manuel tetiklemek icin (render() zaten her
+        frame panelManager.render() uzerinden bunu otomatik yapiyor)."""
+        self.panelManager.sync()
 
     def buildLayout(self, layoutId=0):
         self.destroyLayout()
@@ -96,7 +137,11 @@ class GuiManager:
 
         with dpg.child_window(tag="centerPanel", parent=self.LAYOUT_ROOT,
                               **geometry["centerPanel"]):
-            dpg.add_text("Center Panel")
+            with dpg.child_window(tag="centerTopPanel", width=-1, show=False,
+                                  height=self.CENTER_TOP_HEIGHT, no_scrollbar=True):
+                pass
+            with dpg.child_window(tag="centerCenterPanel", width=-1, height=-1):
+                pass
 
         with dpg.child_window(tag="bottomPanel", parent=self.LAYOUT_ROOT,
                               no_scrollbar=True, **geometry["bottomPanel"]):
@@ -104,6 +149,8 @@ class GuiManager:
 
         for tag in self.PANEL_TAGS:
             dpg.bind_item_theme(tag, self.panelTheme)
+        dpg.bind_item_theme("centerTopPanel", self.panelTheme)
+        dpg.bind_item_theme("centerCenterPanel", self.panelTheme)
 
         s = self._panelInitialCoords("scriptPanel")
         self.scriptPanel.build(s["x"], s["y"], s["width"], s["height"],
