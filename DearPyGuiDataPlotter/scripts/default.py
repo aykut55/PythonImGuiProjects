@@ -5,7 +5,7 @@ import os
 # Data secimi:
 #   0 -> C:\data\csvFiles\VIP\01\VIP-X030-T.csv
 #   1 -> C:\data\csvFiles\IMKBH\05\THYAO.csv
-DATASET_CHOICE = 1
+DATASET_CHOICE = 2
 DATASET_CHOICES = {
     0: {
         "base_dir": r"C:\data\csvFiles",
@@ -18,6 +18,12 @@ DATASET_CHOICES = {
         "market": "IMKBH",
         "symbol": "THYAO",
         "period": "05",
+    },
+    2: {
+        "base_dir": r"C:\data\csvFiles",
+        "market": "IMKBH",
+        "symbol": "THYAO",
+        "period": "G",
     },
 }
 
@@ -299,6 +305,15 @@ class App:
         self.fillPool()
 
         self.draw()
+
+        # Alternatiflerden SADECE BIRI aktif olmali (setXAxisMode her cagrida
+        # bir onceki formatin UZERINE yazar - hepsi ayni anda birakilirsa
+        # sonuncusu kazanir, digerlerinin hicbir etkisi olmaz):
+        #   pm.setXAxisMode("datetime", "%d.%m.%Y %H:%M:%S")   # tarih + saat, tek satir
+        #   pm.setXAxisMode("datetime")                        # (varsayilan) isIntraday'e gore otomatik, iki satir
+        #   pm.setXAxisMode("datetime", "%H:%M:%S")            # sadece saat
+        #   pm.setXAxisMode("datetime", "%d.%m.%Y")            # sadece tarih
+        pm.setXAxisMode("datetime", "auto")                    # isIntraday'e gore: intraday->sadece saat, degilse->sadece tarih
 
         gm.leftMenuPanel.refresh()
         gm.poolPanel.refresh()
