@@ -80,6 +80,7 @@ class DataManager:
         self._currentPeriod = "All"
         self._periodMap = {}   # {period_tag: (symbol, period)}
         self._reader = None    # son basarili okumanin StockDataReader'i
+        self._readSource = None  # "manual" (UI Read dugmesi) | "script" (readData() cagrisi) - bkz. getReadSource
         self._fullPath = ""    # secili/okunan sembolun tam CSV yolu
         self._symbol = ""      # son okunan sembol (path'ten de turetilir)
         self._period = ""      # son okunan periyot (intraday karari icin)
@@ -609,6 +610,7 @@ class DataManager:
         """'Clear': okunan datayi hafizadan siler, reader objesini birakir.
         Yol/secim alanlarini ve Path label'i temizler."""
         self._reader = None
+        self._readSource = None
         self._fullPath = ""
         self._symbol = ""
         self._period = ""
@@ -632,6 +634,7 @@ class DataManager:
         print(f"Symbol : {self._selSymbol}")
         print(f"Market : {self._selMarket}")
         print(f"Period : {self._selPeriod}")
+        self._readSource = "manual"
         return self._readFile(filePath)
 
     def _onReadMetadata(self):
@@ -926,7 +929,16 @@ class DataManager:
           (once setSembolFullPath(...) ya da setSembolMarket/Name/Periyod(...))."""
         if filePath is None:
             filePath = self._fullPath
+        self._readSource = "script"
         return self._readFile(filePath)   # _readFile zaten decompose eder
+
+    def getReadSource(self):
+        """Su anki reader'in nereden geldigini dondurur: 'manual' (UI Read
+        dugmesi) | 'script' (readData() cagrisi) | None (henuz okuma yok).
+        Script'lerin kendi ONCEKI Run'undan kalma bir reader'i mi yoksa
+        kullanicinin ELLE Data Manager'dan okudugu bir reader'i mi gordugunu
+        ayirt etmek icin (bkz. scripts/default.py App.run())."""
+        return self._readSource
 
     def _decomposeFullPath(self, filePath):
         """Tam yolu (.../BASE/MARKET/PERIOD/SYMBOL.csv) parcalarina ayirir ve tum

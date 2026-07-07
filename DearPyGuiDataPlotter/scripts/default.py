@@ -133,7 +133,11 @@ class App:
 
     def loadData(self):
         """dataManager'da (Data Manager penceresi) okuma yapildiysa ONU kullanir;
-        yoksa dataset secimindeki default path'i dataManager uzerinden okur."""
+        yoksa dataset secimindeki default path'i dataManager uzerinden okur.
+        NOT: run() basinda dp.setReader(None) ile cache TEMIZLENIYOR, boylece
+        onceki Run'lardan kalma eski reader DATASET_CHOICE'in onune gecmiyor -
+        yine de Data Manager panelinden bu Run icinde ELLE okuma yapilirsa onu
+        kullanmaya devam eder (bkz. run())."""
         if self.dp.hasReader():
             print("reader = dp.getReader()")
             self.reader = self.dp.getReader()
@@ -190,7 +194,8 @@ class App:
         """Hesaplanan veriyi self.*Panel'lere yazar."""
         self.ohlcPanel.deleteAllData()
         self.ohlcPanel.deleteAllLevels()
-        self.ohlcPanel.setCandleData(self.reader.data, name=SYMBOL, intraday=self.intraday)
+        self.ohlcPanel.setCandleData(self.reader.data, name=self.dp.getSembolName() or SYMBOL,
+                                     intraday=self.intraday)
         for emaId, name, ys in self.emas:
             self.ohlcPanel.addData(emaId, name, "line", self.xs, ys,
                                    timestamps=self.ts, intraday=self.intraday)
@@ -279,7 +284,17 @@ class App:
     def run(self):
         dpg.configure_item("centerTopPanel", show=False)
         pm.setContainer("centerCenterPanel")
-        
+
+        # dp'deki reader ONCEKI Run'un kendi readData() cagrisindan kalmissa
+        # (getReadSource()=="script") DATASET_CHOICE'i degistirmenin hicbir
+        # etkisi olmuyordu (loadData() dp.hasReader() True oldugu icin hep
+        # ESKI veriyi donduruyordu) - o durumda cache'i temizleyip
+        # DATASET_CHOICE'in taze okunmasini sagliyoruz. Ama Data Manager
+        # panelinden ELLE okudugun bir reader ("manual") ASLA silinmez -
+        # loadData() onu kullanmaya devam eder.
+        if gm.dataManager.getReadSource() == "script":
+            gm.dataManager.setReader(None)
+
         # Once eskisini SIL ve bunu ekrana BAS (split_frame) - kullanici
         # gercekten "sifirlandigini" hissetsin. Sonra sifirdan kur+ciz.
         pm.deleteAllPanels()
