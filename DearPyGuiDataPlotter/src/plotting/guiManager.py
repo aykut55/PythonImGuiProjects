@@ -8,6 +8,7 @@ from .panel import Panel
 from .panelData import PanelData
 from .panelManager import PanelManager
 from .poolDataManager import PoolDataManager
+from .poolPanel import PoolPanel
 from .scriptPanel import ScriptPanel
 from ..trading.indicatorManager import IndicatorManager
 from ..trading.stockDataReader import StockDataReader, FilterMode
@@ -51,7 +52,12 @@ class GuiManager:
         self.panelManager = PanelManager()
         self.leftMenuPanel.setPanelManager(self.panelManager)
         self.poolDataManager = PoolDataManager()
-        self.leftMenuPanel.setPoolDataManager(self.poolDataManager)
+        # PoolPanel: DataManager gibi bagimsiz/floating bir pencere - hicbir
+        # slotu isgal etmez, kullanici acip kapatana kadar ekranda kalir.
+        # Symbols/Sembol/Grup dallari alt alta LeftMenuPanel'e sigmadigindan
+        # ayri pencereye alindi.
+        self.poolPanel = PoolPanel()
+        self.poolPanel.setPoolDataManager(self.poolDataManager)
         self.scriptPanel.set_globals(gm=self, pm=self.panelManager, pool=self.poolDataManager,
                                      Panel=Panel, PanelData=PanelData,
                                      StockDataReader=StockDataReader, FilterMode=FilterMode,
@@ -67,6 +73,7 @@ class GuiManager:
             on_toggle_script=self.toggleScript,
             on_toggle_console=self.consolePanel.toggle,
             on_toggle_left_menu=self.toggleLeftMenu,
+            on_toggle_pool=self.togglePoolPanel,
             on_manage_data=self.toggleDataManager,
             on_command_query=self._onCommandQuery,
         )
@@ -77,6 +84,7 @@ class GuiManager:
             ("Toggle Script Panel", self.toggleScript),
             ("Toggle Console Panel", self.consolePanel.toggle),
             ("Toggle Left Menu", self.toggleLeftMenu),
+            ("Toggle Pool Panel", self.togglePoolPanel),
             ("Toggle Data Manager", self.toggleDataManager),
         ]
 
@@ -139,7 +147,7 @@ class GuiManager:
         dpg.delete_item(self.LAYOUT_ROOT, children_only=True)
         for tag in (ScriptPanel.TAG, ScriptPanel.OPEN_DIALOG, ScriptPanel.SAVEAS_DIALOG,
                    DataManager.TAG, DataManager.FILE_DIALOG, DataManager.TREE_HANDLER,
-                   DataManager.KEY_HANDLER, LeftMenuPanel.TAG):
+                   DataManager.KEY_HANDLER, LeftMenuPanel.TAG, PoolPanel.TAG):
             if dpg.does_item_exist(tag):
                 dpg.delete_item(tag)
 
@@ -181,6 +189,13 @@ class GuiManager:
         self.leftMenuPanel.build(*leftGeom["pos"], leftGeom["width"], leftGeom["height"],
                                  onClose=self._relayout)
         dpg.bind_item_theme(LeftMenuPanel.TAG, self.panelTheme)
+
+        # PoolPanel DataManager gibi bagimsiz/floating: hicbir slotu isgal
+        # etmez, sadece ilk build'de config'teki baslangic konumunu alir.
+        p = self._panelInitialCoords("poolPanel")
+        self.poolPanel.build(p["x"], p["y"], p["width"], p["height"],
+                             onClose=self._relayout)
+        dpg.bind_item_theme(PoolPanel.TAG, self.panelTheme)
 
         dpg.set_viewport_resize_callback(self._relayout)
 
@@ -255,6 +270,9 @@ class GuiManager:
     def toggleLeftMenu(self):
         self.leftMenuPanel.toggle()
         self._relayout()
+
+    def togglePoolPanel(self):
+        self.poolPanel.toggle()
 
     def _onCommandQuery(self, query):
         if dpg.does_item_exist("commandPaletteResults"):

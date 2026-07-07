@@ -13,6 +13,9 @@
         "dataManager": {
             "initialCoordinates": {"x": 1546, "y": 147, "width": 520, "height": 819}
         },
+        "poolPanel": {
+            "initialCoordinates": {"x": 1000, "y": 147, "width": 420, "height": 600}
+        },
         "consolePanel": {
             "initialCoordinates": {"x": 1546, "y": 705, "width": 520, "height": 261}
         }

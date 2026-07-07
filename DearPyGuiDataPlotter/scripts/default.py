@@ -280,6 +280,7 @@ class App:
         pm.sync()
         pool.clear()
         gm.leftMenuPanel.refresh()
+        gm.poolPanel.refresh()
         dpg.split_frame()
 
         self.buildPanels()
@@ -300,6 +301,7 @@ class App:
         self.draw()
 
         gm.leftMenuPanel.refresh()
+        gm.poolPanel.refresh()
 
         print("Paneller olusturuldu:")
         for p in pm.iterateAllPanels():
