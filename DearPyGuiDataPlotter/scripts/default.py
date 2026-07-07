@@ -237,7 +237,9 @@ class App:
 
         print("Paneller olusturuldu:")
         for p in pm.iterateAllPanels():
-            print(f"  id={p.id}  name={p.name}  height={p.height}  data={len(p.dataList)}")
+            print(f"  id={p.id}  name={p.name}  height={p.height}")
+            for d in p.iterateAllData():
+                print(f"    data id={d.id}  name={d.name}  type={d.dataType}  bars={len(d.xs)}")
 
         print("Bitti.")
 

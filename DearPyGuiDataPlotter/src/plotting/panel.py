@@ -34,6 +34,7 @@ class Panel:
         self.ySyncMode = "fitVisibleData"
         self.ySyncId = None
         self.yFixedRange = None
+        self._manager = None  # addPanel tarafindan set edilir (bkz. sync/render)
 
     def addData(self, dataId: int, name: str = "", dataType: str = "line",
                xs: list = None, ys: list = None, timestamps=None, intraday: bool = None):
@@ -45,6 +46,7 @@ class Panel:
         (timestamps/intraday None ise o alanlara dokunulmaz.)
         """
         data = PanelData(dataId, name, dataType, xs, ys)
+        data.setParent(self)
         if timestamps is not None:
             data.setTimestamps(dateTime=timestamps)
         if intraday is not None:
@@ -63,6 +65,46 @@ class Panel:
     def getData(self, dataId: int):
         """Panel-ici id ile bir PanelData dondurur (yoksa None)."""
         return next((d for d in self.dataList if d.id == dataId), None)
+
+    def getDataId(self, name):
+        """PanelData ismiyle arayip id dondurur (yoksa None)."""
+        data = self.findData(name)
+        return data.id if data else None
+
+    def findData(self, key):
+        """Esnek PanelData arama: int ise id ile, str ise isim ile. Bulamazsa None."""
+        if isinstance(key, str):
+            return next((d for d in self.dataList if d.name == key), None)
+        return self.getData(key)
+
+    def removeData(self, dataId: int):
+        """deleteData ile ayni (isim tercihi icin ikinci ad)."""
+        self.deleteData(dataId)
+
+    def getAllData(self):
+        return list(self.dataList)
+
+    def iterateAllData(self):
+        for data in self.dataList:
+            yield data
+
+    def hideData(self, dataId: int):
+        data = self.getData(dataId)
+        if data:
+            data.setVisible(False)
+
+    def showData(self, dataId: int):
+        data = self.getData(dataId)
+        if data:
+            data.setVisible(True)
+
+    def hideAllData(self):
+        for data in self.dataList:
+            data.setVisible(False)
+
+    def showAllData(self):
+        for data in self.dataList:
+            data.setVisible(True)
 
     # --- Seviye cizgileri (drag_line): veri DEGIL, plot dekorasyonu (MODEL) ---
     def _addLevel(self, value, vertical, color, thickness, label):
@@ -100,6 +142,7 @@ class Panel:
             source, opens=opens, highs=highs, lows=lows, closes=closes,
             volumes=volumes, sizes=sizes, dateTime=dateTime,
             name=name or self.name, dataId=dataId, intraday=intraday)
+        panelData.setParent(self)
         self.deleteAllData()
         self.dataList.append(panelData)
         return panelData
@@ -118,6 +161,9 @@ class Panel:
 
     def setCaption(self, caption: str):
         self.caption = caption
+
+    def setParent(self, parent):
+        self.parent = parent
 
     def setId(self, panelId: int):
         self.id = panelId
@@ -165,3 +211,28 @@ class Panel:
     def getWidth(self): return self.width
     def getHeight(self): return self.height
     def getVisible(self): return self.visible
+
+    # --- Cizim (PanelManager gerekli - addPanel ile _manager baglanir) ---
+    def draw(self):
+        """Bu panelin (bos) plot kabugunu cizer (= pm.drawPanel(self.id))."""
+        if self._manager is not None:
+            self._manager.drawPanel(self.id)
+
+    def drawData(self):
+        """Bu panelin dataList'indeki serileri + levels'i cizer
+        (= pm.drawPanelData(self.id))."""
+        if self._manager is not None:
+            self._manager.drawPanelData(self.id)
+
+    def sync(self):
+        """Cizili veriyi guncel dataList ile senkronlar (drawData ile ayni;
+        pm.sync()'ten FARKLI - pm.sync() silinen panellerin yetim UI'sini
+        temizler, bunun PanelData seviyesinde bir karsiligi yok)."""
+        self.drawData()
+
+    def render(self):
+        """Bu panelin kabugunun var oldugundan emin olur, sonra verisini
+        cizer (draw() + drawData()) - 'paneli tam olarak ekrana bas' icin
+        tek cagri."""
+        self.draw()
+        self.drawData()

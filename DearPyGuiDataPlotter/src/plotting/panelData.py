@@ -18,6 +18,7 @@ class PanelData:
         self.maxY = 0
         self.xFormat = "%H:%M:%S"
         self.isIntraday = True
+        self.parent = None  # bu PanelData'yi tutan Panel (bkz. setParent/getParent, Panel.addData tarafindan set edilir)
 
         self.timestamps: list = []
         self.open: list = []
@@ -57,6 +58,15 @@ class PanelData:
 
     def setVisible(self, v: bool):
         self.isVisible = v
+
+    def setParent(self, panel):
+        """Bu PanelData'nin ait oldugu Panel'i baglar (Panel.addData tarafindan
+        otomatik cagrilir)."""
+        self.parent = panel
+
+    def getParent(self):
+        """Bu PanelData'nin ait oldugu Panel'i dondurur (baglanmadiysa None)."""
+        return self.parent
 
     def setOhlc(self, openData, highData, lowData, closeData):
         self.dataType = "candle"

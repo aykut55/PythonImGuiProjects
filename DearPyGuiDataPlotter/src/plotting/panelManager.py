@@ -23,8 +23,10 @@ class PanelManager:
     def addPanel(self, panel):
         """Bir paneli (createPanel'den gelen ya da dogrudan Panel(...) ile
         kurulmus) panelManager'a kaydeder. Ileride id catismasini onlemek
-        icin _nextId'i panel.id'nin onune gecirir."""
+        icin _nextId'i panel.id'nin onune gecirir. panel._manager'i buraya
+        baglar ki panel.draw()/drawData()/sync()/render() calisabilsin."""
         self._panels[panel.id] = panel
+        panel._manager = self
         if panel.id >= self._nextId:
             self._nextId = panel.id + 1
         return panel
