@@ -2,10 +2,12 @@ import dearpygui.dearpygui as dpg
 
 from .consolePanel import ConsolePanel
 from .dataManager import DataManager
+from .leftMenuPanel import LeftMenuPanel
 from .menuBar import MenuBar
 from .panel import Panel
 from .panelData import PanelData
 from .panelManager import PanelManager
+from .poolDataManager import PoolDataManager
 from .scriptPanel import ScriptPanel
 from ..trading.indicatorManager import IndicatorManager
 from ..trading.stockDataReader import StockDataReader, FilterMode
@@ -18,14 +20,14 @@ class GuiManager:
     TOP_OFFSET = 40
     TOP_HEIGHT = 100
     BOTTOM_HEIGHT = 60
-    LEFT_WIDTH = 200
+    LEFT_WIDTH = 300
     RIGHT_WIDTH = 520
     SAFETY_MARGIN = 20
     BOTTOM_LIFT = 20
     RIGHT_INSET = 16
     CONSOLE_HEIGHT = 261
     PANEL_PADDING = (10, 10)
-    PANEL_TAGS = ("topPanel", "leftPanel", "centerPanel", "bottomPanel")
+    PANEL_TAGS = ("topPanel", "centerPanel", "bottomPanel")
     CENTER_TOP_HEIGHT = 150  # RangeSlider/HScrollBar icin ayrilan ust bant
 
     def __init__(self, configManager):
@@ -38,11 +40,20 @@ class GuiManager:
         # konumunu alir; ScriptPanel/ConsolePanel gibi viewport resize'da
         # zorla eski konumuna geri alinmaz (bkz. _relayout).
         self.rightSlotPanels = [self.scriptPanel]
+        self.leftMenuPanel = LeftMenuPanel()
+        # LeftMenuPanel ScriptPanel'in aynadaki hali: gorunurse centerPanel
+        # sagdan daralir (leftPanel slotu isgal edilir), kapanirsa centerPanel
+        # sola genisler (bkz. _isLeftSlotOccupied / _computeGeometry).
+        self.leftSlotPanels = [self.leftMenuPanel]
         self.consolePanel = ConsolePanel()
         self.consolePanel.attachStdout()
         self.scriptPanel.set_on_open_console(self.consolePanel.show)
         self.panelManager = PanelManager()
-        self.scriptPanel.set_globals(gm=self, pm=self.panelManager, Panel=Panel, PanelData=PanelData,
+        self.leftMenuPanel.setPanelManager(self.panelManager)
+        self.poolDataManager = PoolDataManager()
+        self.leftMenuPanel.setPoolDataManager(self.poolDataManager)
+        self.scriptPanel.set_globals(gm=self, pm=self.panelManager, pool=self.poolDataManager,
+                                     Panel=Panel, PanelData=PanelData,
                                      StockDataReader=StockDataReader, FilterMode=FilterMode,
                                      IndicatorManager=IndicatorManager)
         self._renderLoopStarted = False
@@ -55,6 +66,7 @@ class GuiManager:
             on_destroy_layout=self.destroyLayout,
             on_toggle_script=self.toggleScript,
             on_toggle_console=self.consolePanel.toggle,
+            on_toggle_left_menu=self.toggleLeftMenu,
             on_manage_data=self.toggleDataManager,
             on_command_query=self._onCommandQuery,
         )
@@ -64,6 +76,7 @@ class GuiManager:
             ("Destroy Layout", self.destroyLayout),
             ("Toggle Script Panel", self.toggleScript),
             ("Toggle Console Panel", self.consolePanel.toggle),
+            ("Toggle Left Menu", self.toggleLeftMenu),
             ("Toggle Data Manager", self.toggleDataManager),
         ]
 
@@ -107,11 +120,13 @@ class GuiManager:
         """Her frame cagrilan ust-seviye render girisi. Su an alt bilesenlere
         delege ediyor; ileride baska bilesenler eklendikce buraya eklenir."""
         self.panelManager.render()
+        self.leftMenuPanel.render()
 
     def sync(self):
         """Model<->UI senkronunu manuel tetiklemek icin (render() zaten her
-        frame panelManager.render() uzerinden bunu otomatik yapiyor)."""
+        frame otomatik yapiyor)."""
         self.panelManager.sync()
+        self.leftMenuPanel.sync()
 
     def buildLayout(self, layoutId=0):
         self.destroyLayout()
@@ -124,7 +139,7 @@ class GuiManager:
         dpg.delete_item(self.LAYOUT_ROOT, children_only=True)
         for tag in (ScriptPanel.TAG, ScriptPanel.OPEN_DIALOG, ScriptPanel.SAVEAS_DIALOG,
                    DataManager.TAG, DataManager.FILE_DIALOG, DataManager.TREE_HANDLER,
-                   DataManager.KEY_HANDLER):
+                   DataManager.KEY_HANDLER, LeftMenuPanel.TAG):
             if dpg.does_item_exist(tag):
                 dpg.delete_item(tag)
 
@@ -134,10 +149,6 @@ class GuiManager:
         with dpg.child_window(tag="topPanel", parent=self.LAYOUT_ROOT,
                               no_scrollbar=True, **geometry["topPanel"]):
             dpg.add_text("Top Panel")
-
-        with dpg.child_window(tag="leftPanel", parent=self.LAYOUT_ROOT,
-                              no_scrollbar=True, **geometry["leftPanel"]):
-            dpg.add_text("Left Panel")
 
         with dpg.child_window(tag="centerPanel", parent=self.LAYOUT_ROOT,
                               **geometry["centerPanel"]):
@@ -166,6 +177,11 @@ class GuiManager:
                                onClose=self._relayout)
         dpg.bind_item_theme(DataManager.TAG, self.panelTheme)
 
+        leftGeom = geometry["leftPanel"]
+        self.leftMenuPanel.build(*leftGeom["pos"], leftGeom["width"], leftGeom["height"],
+                                 onClose=self._relayout)
+        dpg.bind_item_theme(LeftMenuPanel.TAG, self.panelTheme)
+
         dpg.set_viewport_resize_callback(self._relayout)
 
     def _panelInitialCoords(self, panelName):
@@ -184,7 +200,10 @@ class GuiManager:
         appRightEdge = vpW - self.MARGIN - self.RIGHT_INSET
         fullWidth = appRightEdge - self.MARGIN
 
-        centerX = self.MARGIN + self.LEFT_WIDTH + self.MARGIN
+        if self._isLeftSlotOccupied():
+            centerX = self.MARGIN + self.LEFT_WIDTH + self.MARGIN
+        else:
+            centerX = self.MARGIN
         rightX = vpW - self.RIGHT_WIDTH - self.MARGIN - self.RIGHT_INSET
 
         if self._isRightSlotOccupied():
@@ -218,6 +237,10 @@ class GuiManager:
         for panel in self.rightSlotPanels:
             panel.setGeometry(*rightGeom["pos"], rightGeom["width"], rightGeom["height"])
 
+        leftGeom = geometry["leftPanel"]
+        for panel in self.leftSlotPanels:
+            panel.setGeometry(*leftGeom["pos"], leftGeom["width"], leftGeom["height"])
+
         consoleGeom = geometry["consolePanel"]
         self.consolePanel.setGeometry(*consoleGeom["pos"], consoleGeom["width"], consoleGeom["height"])
 
@@ -227,6 +250,10 @@ class GuiManager:
 
     def toggleDataManager(self):
         self.dataManager.toggle()
+        self._relayout()
+
+    def toggleLeftMenu(self):
+        self.leftMenuPanel.toggle()
         self._relayout()
 
     def _onCommandQuery(self, query):
@@ -260,6 +287,9 @@ class GuiManager:
 
     def _isRightSlotOccupied(self):
         return any(panel.isVisible() for panel in self.rightSlotPanels)
+
+    def _isLeftSlotOccupied(self):
+        return any(panel.isVisible() for panel in self.leftSlotPanels)
 
     def _buildMenuBarHeightTheme(self):
         with dpg.theme() as menuBarHeightTheme:

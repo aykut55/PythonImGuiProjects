@@ -63,6 +63,12 @@ class App:
 
         self.xs = []
         self.ts = []
+        self.opens = []
+        self.highs = []
+        self.lows = []
+        self.closes = []
+        self.volumes = []
+        self.sizes = []
         self.emas = []
         self.rsiYs = []
         self.macdLine = []
@@ -70,6 +76,11 @@ class App:
         self.macdHist = []
         self.stochK = []
         self.stochD = []
+        self.signals = []  # al/sat/flat sinyalleri (henuz doldurulmuyor)
+        self.level0 = []
+        self.level30 = []
+        self.level50 = []
+        self.level70 = []
 
     def buildPanels(self):
         """5 sabit paneli olusturur, panelManager'a ekler, Y-sync gruplarini kurar."""
@@ -142,22 +153,32 @@ class App:
 
     def computeIndicators(self):
         """IndicatorManager uzerinden EMA/RSI/MACD/Stochastic hesaplar."""
-        d = self.reader.data
-        self.xs = list(range(d.length))
-        self.ts = d.dateTime
-        opens = [float(v) for v in d.open]
-        highs = [float(v) for v in d.high]
-        lows = [float(v) for v in d.low]
-        closes = [float(v) for v in d.close]
-        volumes = [float(v) for v in d.volume]
-        sizes = [int(v) for v in d.size]
+        d            = self.reader.data
+        self.xs      = list(range(d.length))
+        self.ts      = d.dateTime
+        self.opens   = [float(v) for v in d.open]
+        self.highs   = [float(v) for v in d.high]
+        self.lows    = [float(v) for v in d.low]
+        self.closes  = [float(v) for v in d.close]
+        self.volumes = [float(v) for v in d.volume]
+        self.sizes   = [int(v) for v in d.size]
+        self.signals = []  # al/sat/flat sinyalleri (henuz doldurulmuyor)        
 
-        im = IndicatorManager(self.xs, opens, highs, lows, closes, volumes, sizes)
+        im = IndicatorManager(self.xs, self.opens, self.highs, self.lows,
+                              self.closes, self.volumes, self.sizes)
 
         self.emas = [(i, f"EMA{p}", im.ema(p)) for i, p in enumerate([8, 13, 21], start=1)]
         self.rsiYs = im.rsi(14)
         self.macdLine, self.macdSignal, self.macdHist = im.macd(12, 26, 9)
         self.stochK, self.stochD = im.stochastic(14, 3)
+
+        # Sabit seviye cizgileri (RSI/Stochastic referanslari icin) - pool'a
+        # "Levels" grubunda gidecek (bkz. fillPool).
+        n = len(self.xs)
+        self.level0 = [0.0] * n
+        self.level30 = [30.0] * n
+        self.level50 = [50.0] * n
+        self.level70 = [70.0] * n
 
     def fillPanels(self):
         """Hesaplanan veriyi self.*Panel'lere yazar."""
@@ -202,6 +223,45 @@ class App:
         self.stochPanel.addHline(20, color=(120, 120, 120, 150), label="Oversold")
         self.stochPanel.addHline(80, color=(120, 120, 120, 150), label="Overbought")
 
+    def _makeLinePd(self, dataId, name, ys):
+        """Kaynak listelerden bir 'line' PanelData kurar (pool icin; panele
+        bagli DEGIL)."""
+        d = PanelData(dataId, name, "line", self.xs, ys)
+        d.setTimestamps(dateTime=self.ts)
+        d.isIntraday = self.intraday
+        d.updateStats()
+        d.setFullData()
+        return d
+
+    def fillPool(self):
+        """Kaynak veri (candle + ham seriler) + tum hesaplanan indikatorleri
+        pool'a gonderir (panele bagli DEGIL - cizilmese de pool'da durur).
+        Pool: Sembol > (Data | Indicators) > item, her item id-bazli (pool_N)."""
+        pool.clear()
+        sym = self.dp.getSembolName() or SYMBOL
+
+        candleData = self.ohlcPanel.getData(0)
+        if candleData:
+            pool.addItem("OHLC", "Data", candleData, symbol=sym)
+
+        dataSeries = [("Open", self.opens), ("High", self.highs), ("Low", self.lows),
+                     ("Close", self.closes), ("Volume", self.volumes), ("Size", self.sizes)]
+        for i, (name, ys) in enumerate(dataSeries, start=1):
+            pool.addItem(name, "Data", self._makeLinePd(i, name, ys), symbol=sym)
+
+        indSeries = [(name, ys) for _, name, ys in self.emas]
+        indSeries += [("MACD", self.macdLine), ("Signal", self.macdSignal), ("Hist", self.macdHist),
+                     ("RSI14", self.rsiYs), ("%K", self.stochK), ("%D", self.stochD)]
+        for i, (name, ys) in enumerate(indSeries, start=1):
+            pool.addItem(name, "Indicators", self._makeLinePd(i, name, ys), symbol=sym)
+
+        levelSeries = [("Level0", self.level0), ("Level30", self.level30),
+                      ("Level50", self.level50), ("Level70", self.level70)]
+        for i, (name, ys) in enumerate(levelSeries, start=1):
+            pool.addItem(name, "Levels", self._makeLinePd(i, name, ys), symbol=sym)
+
+        print(f"Pool'a eklendi: {len(pool.getAllItems())} item")
+
     def draw(self):
         # pm.drawPanels()/drawAllPanelData() YOK - tekil eylem, script kendi
         # dongusunu kurar. drawPanel: kabuk (child_window+plot+eksenler).
@@ -232,8 +292,12 @@ class App:
         self.computeIndicators()
         
         self.fillPanels()
-        
+
+        self.fillPool()
+
         self.draw()
+
+        gm.leftMenuPanel.refresh()
 
         print("Paneller olusturuldu:")
         for p in pm.iterateAllPanels():

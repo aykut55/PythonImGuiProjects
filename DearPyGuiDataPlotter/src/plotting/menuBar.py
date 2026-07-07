@@ -9,6 +9,7 @@ class MenuBar:
         self._on_manage_data = None
         self._on_toggle_script = None
         self._on_toggle_console = None
+        self._on_toggle_left_menu = None
         self._on_open_all = None
         self._on_collapse_all = None
         self._on_expand_all = None
@@ -20,6 +21,7 @@ class MenuBar:
     def set_callback(self, on_build_layout=None, on_destroy_layout=None,
                      on_manage_panels=None, on_manage_data=None,
                      on_toggle_script=None, on_toggle_console=None,
+                     on_toggle_left_menu=None,
                      on_open_all=None, on_collapse_all=None,
                      on_expand_all=None, on_cascade_all=None, on_close_all=None,
                      on_toggle_theme=None, on_command_query=None):
@@ -29,6 +31,7 @@ class MenuBar:
         self._on_manage_data = on_manage_data
         self._on_toggle_script = on_toggle_script
         self._on_toggle_console = on_toggle_console
+        self._on_toggle_left_menu = on_toggle_left_menu
         self._on_open_all = on_open_all
         self._on_collapse_all = on_collapse_all
         self._on_expand_all = on_expand_all
@@ -67,6 +70,8 @@ class MenuBar:
                                   callback=lambda: self._on_toggle_theme and self._on_toggle_theme())
 
             with dpg.menu(label="Panels"):
+                dpg.add_menu_item(label="Left Menu",
+                                  callback=lambda: self._on_toggle_left_menu and self._on_toggle_left_menu())
                 dpg.add_menu_item(label="Script Panel",
                                   callback=lambda: self._on_toggle_script and self._on_toggle_script())
                 dpg.add_menu_item(label="Console Panel",
