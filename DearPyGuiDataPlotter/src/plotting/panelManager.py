@@ -83,9 +83,9 @@ class PanelManager:
         return self._container
 
     def drawPanel(self, panelId):
-        """Tek bir paneli (id ile) cizer - (bos) plot UI'sini kurar. Veri
-        cizimi (redrawPanelData) HENUZ YOK. Toplu cizim icin script kendi
-        dongusunu kurar: `for p in pm.iterateAllPanels(): pm.drawPanel(p.id)`
+        """Tek bir paneli (id ile) cizer - (bos) plot UI'sini kurar. Veriyi
+        CIZMEZ (bkz. drawPanelData). Toplu cizim icin script kendi dongusunu
+        kurar: `for p in pm.iterateAllPanels(): pm.drawPanel(p.id)`
         (bilerek 'drawPanels' gibi coklu-eylem metodu YOK - API tekil
         eylemlerden olusuyor, coklu islemi script kendisi orgutler)."""
         panel = self._panels.get(panelId)
@@ -93,6 +93,61 @@ class PanelManager:
             return
         self._buildPanelUi(panel)
         self._drawnPanelIds.add(panelId)
+
+    def drawPanelData(self, panelId):
+        """Panelin dataList'indeki (candle/bar/line) serilerini + levels
+        (hline/vline) cizgilerini plot'a basar. Tekrar cagrilabilir (once
+        y_axis'in tum eski cizimlerini siler). Zaman ekseni tick'leri/LOD
+        YOK - ham veriyle cizer. drawPanel'den SONRA cagrilmali (once kabuk
+        kurulmali: panel_{id}/y_axis_{id} var olmali)."""
+        panel = self._panels.get(panelId)
+        yTag = f"y_axis_{panelId}"
+        if panel is None or not dpg.does_item_exist(yTag):
+            return
+        dpg.delete_item(yTag, children_only=True)
+        for d in panel.dataList:
+            if not d.isVisible:
+                continue
+            if d.dataType == "candle" and d.open and d.high and d.low and d.close:
+                xs = d.xs if d.xs else list(range(len(d.open)))
+                dpg.add_candle_series(xs, d.open, d.close, d.low, d.high, label=d.name,
+                                      tag=f"candle_{panelId}_{d.id}",
+                                      parent=yTag, tooltip=False)
+            elif d.dataType == "bar" and d.volume:
+                xs = d.xs if d.xs else list(range(len(d.volume)))
+                dpg.add_bar_series(xs, d.volume, label=f"{d.name} Vol",
+                                   tag=f"bar_{panelId}_{d.id}", parent=yTag)
+            else:
+                dpg.add_line_series(d.xs, d.ys, label=d.name,
+                                    tag=f"line_{panelId}_{d.id}", parent=yTag)
+        self._drawLevels(panelId, panel)
+
+    def _drawLevels(self, panelId, panel):
+        """panel.levels'daki yatay/dikey seviye cizgilerini inf_line_series
+        ile cizer (legend'da gorunur sonsuz cizgi). y_axis'e baglidir, o
+        yuzden drawPanelData'nin y_axis temizligiyle birlikte yeniden cizilir."""
+        yTag = f"y_axis_{panelId}"
+        if not dpg.does_item_exist(yTag):
+            return
+        for i, lvl in enumerate(panel.levels):
+            tag = f"level_{panelId}_{i}"
+            v = lvl["value"]
+            label = lvl["label"] or (str(int(v)) if v == int(v) else str(v))
+            series = dpg.add_inf_line_series(
+                [v], horizontal=(not lvl["vertical"]), label=label,
+                tag=tag, parent=yTag)
+            color = lvl.get("color")
+            if color:
+                themeTag = f"{tag}_theme"
+                if dpg.does_item_exist(themeTag):
+                    dpg.delete_item(themeTag)
+                with dpg.theme(tag=themeTag):
+                    with dpg.theme_component(dpg.mvInfLineSeries):
+                        dpg.add_theme_color(dpg.mvPlotCol_Line, color, category=dpg.mvThemeCat_Plots)
+                        if lvl.get("thickness"):
+                            dpg.add_theme_style(dpg.mvPlotStyleVar_LineWeight,
+                                                float(lvl["thickness"]), category=dpg.mvThemeCat_Plots)
+                dpg.bind_item_theme(series, themeTag)
 
     def _buildPanelUi(self, panel, width=None, height=None):
         """Panelin plot UI'sini (child_window + plot + legend + eksenler)

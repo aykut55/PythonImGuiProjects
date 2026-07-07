@@ -7,6 +7,8 @@ from .panel import Panel
 from .panelData import PanelData
 from .panelManager import PanelManager
 from .scriptPanel import ScriptPanel
+from ..trading.indicatorManager import IndicatorManager
+from ..trading.stockDataReader import StockDataReader, FilterMode
 
 
 class GuiManager:
@@ -40,7 +42,9 @@ class GuiManager:
         self.consolePanel.attachStdout()
         self.scriptPanel.set_on_open_console(self.consolePanel.show)
         self.panelManager = PanelManager()
-        self.scriptPanel.set_globals(gm=self, pm=self.panelManager, Panel=Panel, PanelData=PanelData)
+        self.scriptPanel.set_globals(gm=self, pm=self.panelManager, Panel=Panel, PanelData=PanelData,
+                                     StockDataReader=StockDataReader, FilterMode=FilterMode,
+                                     IndicatorManager=IndicatorManager)
         self._renderLoopStarted = False
         self.isDarkTheme = True
         self.lightTheme = self._buildLightTheme()

@@ -1,56 +1,244 @@
-# Hazir: gm, pm, dpg, Panel, PanelData
+# Hazir: gm, pm, dpg, Panel, PanelData, StockDataReader, FilterMode, IndicatorManager
 
-def main():
-    dpg.configure_item("centerTopPanel", show=False)
-    
-    pm.setContainer("centerCenterPanel")
-    
-    pm.deleteAllPanels()
+import os
 
-    ohlcPanel = pm.createPanel("OHLC", "OHLC Verisi")
-    ohlcPanel.setHeight(400)
-    pm.addPanel(ohlcPanel)
+# Data secimi:
+#   0 -> C:\data\csvFiles\VIP\01\VIP-X030-T.csv
+#   1 -> C:\data\csvFiles\IMKBH\05\THYAO.csv
+DATASET_CHOICE = 1
+DATASET_CHOICES = {
+    0: {
+        "base_dir": r"C:\data\csvFiles",
+        "market": "VIP",
+        "symbol": "VIP-X030-T",
+        "period": "01",
+    },
+    1: {
+        "base_dir": r"C:\data\csvFiles",
+        "market": "IMKBH",
+        "symbol": "THYAO",
+        "period": "05",
+    },
+}
 
-    movAvgPanel = pm.createPanel("MovAvg", "Hareketli Ortalamalar")
-    movAvgPanel.setHeight(300)
-    pm.addPanel(movAvgPanel)
+_dataset = DATASET_CHOICES.get(DATASET_CHOICE, DATASET_CHOICES[1])
+BASE_DIR = _dataset["base_dir"]   # kaynak Data Manager varsayilani
+MARKET = _dataset["market"]
+SYMBOL = _dataset["symbol"]
+PERIOD = _dataset["period"]       # 01=1dk 05=5dk 10 15 20 30 (dk) 60=1s 120=2s 240=4s | G=gunluk H=haftalik A=aylik
 
-    macdPanel = pm.createPanel("MACD", "MACD")
-    macdPanel.setHeight(200)
-    pm.addPanel(macdPanel)
-
-    rsiPanel = pm.createPanel("RSI", "RSI")
-    rsiPanel.setHeight(200)
-    pm.addPanel(rsiPanel)
-
-    stochPanel = pm.createPanel("Stochastic", "Stochastic %K / %D")
-    stochPanel.setHeight(200)
-    pm.addPanel(stochPanel)
-
-    # Y ekseni senkron gruplari
-    ohlcPanel.setYSyncId(0)
-    movAvgPanel.setYSyncId(0)
-    macdPanel.setYSyncId(1)
-    rsiPanel.setYSyncId(2)
-    stochPanel.setYSyncId(3)
-
-    # pm.drawPanels()
-    for p in pm.iterateAllPanels():
-        pm.drawPanel(p.id)
-
-    # getPanelId ornegi: referans (ohlcPanel) elde olmasa bile isimle id bulunur.
-    ohlcId = pm.getPanelId("OHLC")
-    print(f"OHLC panelinin id'si: {ohlcId}")
-
-    print("Paneller olusturuldu:")
-    
-    for p in pm.getAllPanels():
-        print(f"  id={p.id}  name={p.name}  height={p.height}")
-
-    for p in pm.iterateAllPanels():
-        print(f"  id={p.id}  name={p.name}  height={p.height}")
-
-    print("Bitti.")
+# (klasor_kodu, etiket)  -> yol: BASE_DIR/MARKET/kod/SYMBOL.csv
+# Diskte (IMKBH) THYAO icin mevcut tum periyotlar:
+PERIODS = [
+    ("01",  "1dk"),
+    ("05",  "5dk"),
+    ("10",  "10dk"),
+    ("15",  "15dk"),
+    ("20",  "20dk"),
+    ("30",  "30dk"),
+    ("60",  "1saat"),
+    ("120", "2saat"),
+    ("240", "4saat"),
+    ("G",   "Gunluk"),
+    ("H",   "Haftalik"),
+    ("A",   "Aylik"),
+]
 
 
-main()
+class App:
+    """OHLC + EMA/MACD/RSI/Stochastic panellerini kurup dolduran script uygulamasi.
+    Ara durum (paneller, reader, indikator sonuclari) self uzerinde tutulur
+    ki metodlar birbirine parametre gecirmeden erisebilsin."""
+
+    def __init__(self):
+        self.ohlcPanel = None
+        self.movAvgPanel = None
+        self.macdPanel = None
+        self.rsiPanel = None
+        self.stochPanel = None
+
+        self.dp = gm.dataManager
+        self.reader = None
+        self.intraday = True
+
+        self.xs = []
+        self.ts = []
+        self.emas = []
+        self.rsiYs = []
+        self.macdLine = []
+        self.macdSignal = []
+        self.macdHist = []
+        self.stochK = []
+        self.stochD = []
+
+    def buildPanels(self):
+        """5 sabit paneli olusturur, panelManager'a ekler, Y-sync gruplarini kurar."""
+        self.ohlcPanel = pm.createPanel("OHLC", "OHLC Verisi")
+        self.ohlcPanel.setHeight(400)
+        pm.addPanel(self.ohlcPanel)
+
+        self.movAvgPanel = pm.createPanel("MovAvg", "Hareketli Ortalamalar")
+        self.movAvgPanel.setHeight(300)
+        pm.addPanel(self.movAvgPanel)
+
+        self.macdPanel = pm.createPanel("MACD", "MACD")
+        self.macdPanel.setHeight(200)
+        pm.addPanel(self.macdPanel)
+
+        self.rsiPanel = pm.createPanel("RSI", "RSI")
+        self.rsiPanel.setHeight(200)
+        pm.addPanel(self.rsiPanel)
+
+        self.stochPanel = pm.createPanel("Stochastic", "Stochastic %K / %D")
+        self.stochPanel.setHeight(200)
+        pm.addPanel(self.stochPanel)
+
+        # Y ekseni senkron gruplari
+        self.ohlcPanel.setYSyncId(0)
+        self.movAvgPanel.setYSyncId(0)
+        self.macdPanel.setYSyncId(1)
+        self.rsiPanel.setYSyncId(2)
+        self.stochPanel.setYSyncId(3)
+
+    def quickReadData(self, market, symbol, period):
+        """dataManager'i (Data Manager penceresini) atlayip CSV'yi DOGRUDAN
+        StockDataReader ile okur - hizli yol / test icin. Yol: BASE_DIR/market/period/symbol.csv
+        (dosya yoksa None doner)."""
+        filePath = os.path.join(BASE_DIR, market, period, f"{symbol}.csv")
+        if not os.path.isfile(filePath):
+            print(f"  [YOK] {filePath}")
+            return None
+        reader = StockDataReader()
+        reader.readMetaData(filePath)
+        reader.readDataWithPandas(filePath)
+        print(f"  {symbol} [{period}]: {reader.data.length} bar  ({reader.elapsedMs} ms)")
+        return reader
+
+    def loadData(self):
+        """dataManager'da (Data Manager penceresi) okuma yapildiysa ONU kullanir;
+        yoksa dataset secimindeki default path'i dataManager uzerinden okur."""
+        if self.dp.hasReader():
+            print("reader = dp.getReader()")
+            self.reader = self.dp.getReader()
+        else:
+            sembolPath = os.path.join(BASE_DIR, MARKET, PERIOD, f"{SYMBOL}.csv")
+            print("reader = dp.readData(sembolPath)")
+            self.reader = self.dp.readData(sembolPath)
+
+        print(f"{'SembolFullPath':<15} : {self.dp.getSembolFullPath()}")
+        print(f"{'SembolBaseDir':<15} : {self.dp.getSembolBaseDir()}")
+        print(f"{'SembolMarket':<15} : {self.dp.getSembolMarket()}")
+        print(f"{'SembolName':<15} : {self.dp.getSembolName()}")
+        print(f"{'SembolPeriyod':<15} : {self.dp.getSembolPeriyod()}")
+        print(f"{'SembolDataCount':<15} : {self.dp.getSembolDataCount()}")
+        print()
+
+        # dataManager'dan gelen periyoda gore intraday (rakamsal periyot=dakika/saat
+        # -> True; G/H/A -> False). Tum candle/line cizimleri bu intraday'i kullanir.
+        self.intraday = self.dp.isIntraday()
+
+    def hasData(self):
+        return self.reader is not None and self.reader.data.length > 0
+
+    def computeIndicators(self):
+        """IndicatorManager uzerinden EMA/RSI/MACD/Stochastic hesaplar."""
+        d = self.reader.data
+        self.xs = list(range(d.length))
+        self.ts = d.dateTime
+        opens = [float(v) for v in d.open]
+        highs = [float(v) for v in d.high]
+        lows = [float(v) for v in d.low]
+        closes = [float(v) for v in d.close]
+        volumes = [float(v) for v in d.volume]
+        sizes = [int(v) for v in d.size]
+
+        im = IndicatorManager(self.xs, opens, highs, lows, closes, volumes, sizes)
+
+        self.emas = [(i, f"EMA{p}", im.ema(p)) for i, p in enumerate([8, 13, 21], start=1)]
+        self.rsiYs = im.rsi(14)
+        self.macdLine, self.macdSignal, self.macdHist = im.macd(12, 26, 9)
+        self.stochK, self.stochD = im.stochastic(14, 3)
+
+    def fillPanels(self):
+        """Hesaplanan veriyi self.*Panel'lere yazar."""
+        self.ohlcPanel.deleteAllData()
+        self.ohlcPanel.deleteAllLevels()
+        self.ohlcPanel.setCandleData(self.reader.data, name=SYMBOL, intraday=self.intraday)
+        for emaId, name, ys in self.emas:
+            self.ohlcPanel.addData(emaId, name, "line", self.xs, ys,
+                                   timestamps=self.ts, intraday=self.intraday)
+
+        self.movAvgPanel.deleteAllData()
+        self.movAvgPanel.deleteAllLevels()
+        for emaId, name, ys in self.emas:
+            self.movAvgPanel.addData(emaId, name, "line", self.xs, ys,
+                                     timestamps=self.ts, intraday=self.intraday)
+
+        self.macdPanel.deleteAllData()
+        self.macdPanel.deleteAllLevels()
+        macdSeries = ((1, "MACD", self.macdLine), (2, "Signal", self.macdSignal), (3, "Hist", self.macdHist))
+        for dataId, name, ys in macdSeries:
+            self.macdPanel.addData(dataId, name, "line", self.xs, ys,
+                                   timestamps=self.ts, intraday=self.intraday)
+
+        self.rsiPanel.deleteAllData()
+        self.rsiPanel.deleteAllLevels()
+        self.rsiPanel.addData(1, "RSI14", "line", self.xs, self.rsiYs,
+                              timestamps=self.ts, intraday=self.intraday)
+        self.rsiPanel.addHline(30, color=(120, 120, 120, 150))
+        self.rsiPanel.addHline(70, color=(120, 120, 120, 150), label="Overbought")
+        # Sondan 1000. ve 2000. bara dikey cizgi (xs[-N] = sondan N. bar)
+        n = len(self.xs)
+        if n >= 1000:
+            self.rsiPanel.addVline(self.xs[-1000], color=(255, 0, 0, 150), label="-1000")
+        if n >= 2000:
+            self.rsiPanel.addVline(self.xs[-2000], color=(255, 150, 0, 150), label="-2000")
+
+        self.stochPanel.deleteAllData()
+        self.stochPanel.deleteAllLevels()
+        for dataId, name, ys in ((1, "%K", self.stochK), (2, "%D", self.stochD)):
+            self.stochPanel.addData(dataId, name, "line", self.xs, ys,
+                                    timestamps=self.ts, intraday=self.intraday)
+        self.stochPanel.addHline(20, color=(120, 120, 120, 150), label="Oversold")
+        self.stochPanel.addHline(80, color=(120, 120, 120, 150), label="Overbought")
+
+    def draw(self):
+        # pm.drawPanels()/drawAllPanelData() YOK - tekil eylem, script kendi
+        # dongusunu kurar. drawPanel: kabuk (child_window+plot+eksenler).
+        # drawPanelData: kabugun icine gercek candle/line serilerini basar.
+        for p in pm.iterateAllPanels():
+            pm.drawPanel(p.id)
+            pm.drawPanelData(p.id)
+
+    def run(self):
+        dpg.configure_item("centerTopPanel", show=False)
+        pm.setContainer("centerCenterPanel")
+        
+        # Once eskisini SIL ve bunu ekrana BAS (split_frame) - kullanici
+        # gercekten "sifirlandigini" hissetsin. Sonra sifirdan kur+ciz.
+        pm.deleteAllPanels()
+        pm.sync()
+        dpg.split_frame()
+
+        self.buildPanels()
+        
+        self.loadData()
+        if not self.hasData():
+            print("Veri okunamadi, cikiliyor.")
+            return
+
+        print(f"BarCount: {self.reader.data.length}   Elapsed: {self.reader.elapsedMs} ms")
+
+        self.computeIndicators()
+        
+        self.fillPanels()
+        
+        self.draw()
+
+        print("Paneller olusturuldu:")
+        for p in pm.iterateAllPanels():
+            print(f"  id={p.id}  name={p.name}  height={p.height}  data={len(p.dataList)}")
+
+        print("Bitti.")
+
+App().run()
