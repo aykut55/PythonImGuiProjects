@@ -22,6 +22,7 @@ class PanelManager:
         self._dayChangeFormat = "%d.%m.%Y\n%H:%M:%S"  # saat-bazli (tarihsiz) formatlarda gun degisen bar'a ozel format (bkz. _buildDatetimeTicks)
         self._dayBoundaryScanCap = 5000  # gun degisimi taramasi (O(bar)) bu barsInRange'i asarsa YAPILMAZ - performans/guvenlik
         self._dayChangeMarkersEnabled = False  # gun degisimini x eksende AYRICA isaretleme (kod hazir, gorunumu karistirdigi icin simdilik KAPALI - bkz. _buildDatetimeTicks)
+        self._debugAxisTicks = False  # True ise DPG'ye gonderilen (label, bar_no) tick'leri konsola basar (bkz. setDebugAxisTicks) - ekrandaki ile karsilastirip dogrulamak icin
 
     def createPanel(self, name, caption="", parent="", alignment=None):
         """Otomatik id ile YALNIZCA bir Panel olusturur, DONDURUR - panelManager'a
@@ -191,6 +192,13 @@ class PanelManager:
         self._lastAxisTicksSignature.clear()
         self.updateXAxisTicks()
 
+    def setDebugAxisTicks(self, enabled: bool):
+        """True ise datetime modunda DPG'ye gonderilen HER tick listesini
+        (panel, gorunur bar araligi, (label, bar_no) ciftleri) konsola basar
+        - ekranda gorunen ile karsilastirip hesaplanan tarihin dogru bar'a
+        mi denk geldigini dogrulamak icin (bkz. updateXAxisTicks)."""
+        self._debugAxisTicks = bool(enabled)
+
     def getXAxisMode(self):
         return self._xAxisMode
 
@@ -229,6 +237,8 @@ class PanelManager:
                 continue
             self._lastAxisTicksSignature[pid] = ticks
             if ticks:
+                if self._debugAxisTicks:
+                    print(f"[xAxisTicks] panel={pid} lo={lo:.1f} hi={hi:.1f} ticks={ticks}")
                 dpg.set_axis_ticks(axis, ticks)
             else:
                 dpg.reset_axis_ticks(axis)

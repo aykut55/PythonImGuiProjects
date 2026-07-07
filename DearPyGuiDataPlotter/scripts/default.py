@@ -5,7 +5,7 @@ import os
 # Data secimi:
 #   0 -> C:\data\csvFiles\VIP\01\VIP-X030-T.csv
 #   1 -> C:\data\csvFiles\IMKBH\05\THYAO.csv
-DATASET_CHOICE = 2
+DATASET_CHOICE = 1
 DATASET_CHOICES = {
     0: {
         "base_dir": r"C:\data\csvFiles",
