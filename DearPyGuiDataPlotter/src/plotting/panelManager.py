@@ -26,6 +26,13 @@ class PanelManager:
         self._dayBoundaryScanCap = 5000  # gun degisimi taramasi (O(bar)) bu barsInRange'i asarsa YAPILMAZ - performans/guvenlik
         self._dayChangeMarkersEnabled = False  # gun degisimini x eksende AYRICA isaretleme (kod hazir, gorunumu karistirdigi icin simdilik KAPALI - bkz. _buildDatetimeTicks)
         self._debugAxisTicks = False  # True ise DPG'ye gonderilen (label, bar_no) tick'leri konsola basar (bkz. setDebugAxisTicks) - ekrandaki ile karsilastirip dogrulamak icin
+        self._infoPanelMode = "always"  # hidden | hover | active | always (bkz. setInfoPanelMode)
+        self._infoActivePanelId = None  # "active" modunda hangi panelin hover_text'i gosterilecek (bkz. setActiveInfoPanel)
+        self._infoLastIndex = {}  # {panelId: son cozulen index} - mouse panelden cikinca son degeri korur
+        self._infoSharedIndex = None  # "always"/"active" modunda TUM panellerin ortak gosterecegi index (bir plot'un uzerine gelince paylasilir)
+        self._crossHairMode = "all"  # hidden | single | all - varsayilan "all": infoPanel gibi TUM panellerde surekli (bkz. setCrossHairMode)
+        self._crossHairPersist = True  # varsayilan True: mouse plot'tan cikinca crosshair SON pozisyonda kalir, gizlenmez - infoPanel'in "always" modu gibi surekli gorunur (bkz. setCrossHairPersist)
+        self._crossHairLastPos = None  # (kaynakPanelId, x, y) - persist ve "all" modunun paylastigi son bilinen konum
 
     def createPanel(self, name, caption="", parent="", alignment=None):
         """Otomatik id ile YALNIZCA bir Panel olusturur, DONDURUR - panelManager'a
@@ -454,9 +461,11 @@ class PanelManager:
         return longest * self._axisCharPxWidth + self._axisTickPadding
 
     def _buildPanelUi(self, panel, width=None, height=None):
-        """Panelin plot UI'sini (child_window + plot + legend + eksenler)
-        olusturur. Zaten varsa no-op. Veri CIZMEZ. Tag semasi Ref3 ile ayni:
-        panel_{id} / plot_{id} / x_axis_{id} / y_axis_{id}."""
+        """Panelin plot UI'sini (child_window + plot + legend + eksenler +
+        info-panel hover_text + ham mouse-pos metni + crosshair) olusturur.
+        Zaten varsa no-op. Veri CIZMEZ. Tag semasi Ref3 ile ayni: panel_{id} /
+        plot_{id} / x_axis_{id} / y_axis_{id} / hover_text_{id} /
+        mouse_pos_text_{id} / crosshair_v_{id} / crosshair_h_{id}."""
         tag = f"panel_{panel.id}"
         if dpg.does_item_exist(tag):
             return
@@ -470,11 +479,30 @@ class PanelManager:
         else:
             dpg.add_child_window(tag=tag, width=w, height=h, no_scrollbar=True)
 
+        # no_mouse_pos: DPG'nin sag-alt ham (x,y) okumasini gizler - onun
+        # yerine hover_text_{id} (updateInfoOverlays) + mouse_pos_text_{id}
+        # (updateMousePosOverlays, plotun sag-ust kosesinde sabit) kullanilir.
         plotTag = dpg.add_plot(label=panel.caption, height=-1, width=-1, parent=tag,
                                tag=f"plot_{panel.id}", no_mouse_pos=True)
         dpg.add_plot_legend(parent=plotTag, location=dpg.mvPlot_Location_SouthEast)
         dpg.add_plot_axis(dpg.mvXAxis, label="", tag=f"x_axis_{panel.id}", parent=plotTag)
         dpg.add_plot_axis(dpg.mvYAxis, label="y", tag=f"y_axis_{panel.id}", parent=plotTag)
+        dpg.add_text("", tag=f"hover_text_{panel.id}", parent=tag,
+                    pos=(80, 40), color=(210, 210, 220, 255), show=False)
+        dpg.add_text("", tag=f"mouse_pos_text_{panel.id}", parent=tag,
+                    pos=(0, 8), color=(210, 210, 220, 255), show=False)
+        # Crosshair (dikey+yatay drag_line, Ref3'teki plot_controller.py'deki
+        # register_plot ile ayni stil): no_inputs -> kullanici suruklemez,
+        # sadece imlec konumunu gostermek icin kullanilir. Cizim/gosterme
+        # panel_id BAZINDA updateCrossHairOverlays()'te yapilir.
+        dpg.add_drag_line(tag=f"crosshair_v_{panel.id}", parent=plotTag,
+                          default_value=0.0, color=(255, 255, 0, 160),
+                          thickness=1, vertical=True, no_inputs=True,
+                          no_fit=True, show=False)
+        dpg.add_drag_line(tag=f"crosshair_h_{panel.id}", parent=plotTag,
+                          default_value=0.0, color=(255, 255, 0, 160),
+                          thickness=1, vertical=False, no_inputs=True,
+                          no_fit=True, show=False)
 
     def hidePanel(self, panelId):
         """Paneli gizler (model: panel.visible=False + varsa UI'da show=False)."""
@@ -523,6 +551,439 @@ class PanelManager:
                 h = panel.height if panel.height and panel.height > 0 else 300
                 dpg.set_item_height(tag, h)
 
+    # --------------------------------------------------------- info paneli
+    def setInfoPanelMode(self, mode: str):
+        """Info panelinin (hover_text_{id}) ne zaman gosterilecegini belirler:
+          hidden -> hicbir panelde gosterilmez
+          hover  -> yalniz o an mouse'un ustunde oldugu plot'ta gosterilir
+          active -> yalniz setActiveInfoPanel ile secilen panelde gosterilir
+          always -> (varsayilan) TUM panellerde sabit gosterilir
+        Ref3'teki set_info_panel_mode ile ayni."""
+        mode = str(mode or "").lower()
+        if mode not in ("hidden", "hover", "active", "always"):
+            raise ValueError("info panel mode must be one of: hidden, hover, active, always")
+        self._infoPanelMode = mode
+
+    def getInfoPanelMode(self):
+        return self._infoPanelMode
+
+    def setInfoPanelsVisible(self, visible: bool):
+        """Kisayol: visible=True -> mode 'always', visible=False -> mode 'hover'."""
+        self.setInfoPanelMode("always" if visible else "hover")
+
+    def setActiveInfoPanel(self, panelId):
+        """mode='active' iken hangi panelin info panelinin gosterilecegini secer."""
+        self._infoActivePanelId = panelId
+
+    def setInfoSharedIndex(self, index):
+        """mode='always'/'active' iken TUM panellerin ortak gosterecegi bar
+        index'ini elle ayarlar (bir plot'un uzerine gelince zaten otomatik
+        guncellenir, bu manuel/script kontrolu icindir)."""
+        if index is None:
+            return
+        self._infoSharedIndex = int(index)
+
+    def updateInfoOverlays(self):
+        """Info panellerini (hover_text_{id}) secili moda gore gunceller.
+        render() tarafindan her frame cagrilir - Ref3'teki update_info_overlays
+        ile ayni. Mouse'un ustunde oldugu plot varsa oradaki bar index'i
+        _infoSharedIndex'e yazilir (boylece always/active modunda TUM
+        panellerdeki readout ayni bar'i gosterir - cross-plot senkron)."""
+        hoveredPanelId, hoveredIndex = self._currentHoverInfoIndex()
+        if hoveredIndex is not None:
+            self._infoSharedIndex = hoveredIndex
+
+        for panelId, panel in self._panels.items():
+            plotTag = f"plot_{panelId}"
+            textTag = f"hover_text_{panelId}"
+            if not dpg.does_item_exist(plotTag) or not dpg.does_item_exist(textTag):
+                continue
+            if not self._shouldShowInfoPanel(panelId, plotTag, hoveredPanelId):
+                dpg.hide_item(textTag)
+                continue
+
+            d = self._pickInfoSourceData(panel)
+            if d is None:
+                dpg.hide_item(textTag)
+                continue
+
+            idx = self._resolveInfoIndex(panelId, d, hoveredPanelId, hoveredIndex)
+            label = self._buildHoverLabel(panel, d, idx)
+            if not label:
+                dpg.hide_item(textTag)
+                continue
+            dpg.set_value(textTag, label)
+            dpg.show_item(textTag)
+
+    def updateMousePosOverlays(self):
+        """Demo'larda gorulen ham mouse-pos okumasi: mouse hangi plot'un
+        uzerindeyse SADECE o panelde, sag-ust kosede SABIT (mouse'u TAKIP
+        ETMEZ, sadece deger guncellenir) gosterilir; diger panellerde ve
+        mouse hicbir plotta degilken gizli kalir. x ekseni bar index oldugu
+        icin "xBar" tam sayi, "yBar" ondalikli yazilir.
+        Koseye sabit kalmasi icin panelin GERCEK genisligi (yeniden
+        boyutlanabilir oldugu icin) her frame okunup metnin x konumu ona
+        gore hesaplanir (sag kenardan RIGHT_MARGIN kadar icerde)."""
+        RIGHT_MARGIN = 40  # saga tam yapismasin diye (biraz sola cekildi)
+        for panelId in self._panels:
+            plotTag = f"plot_{panelId}"
+            textTag = f"mouse_pos_text_{panelId}"
+            if not dpg.does_item_exist(plotTag) or not dpg.does_item_exist(textTag):
+                continue
+            if not dpg.is_item_hovered(plotTag):
+                dpg.hide_item(textTag)
+                continue
+            try:
+                mx, my = dpg.get_plot_mouse_pos()
+            except Exception:
+                dpg.hide_item(textTag)
+                continue
+            dpg.set_value(textTag, f"xBar={round(mx)}  yBar={my:.2f}")
+            panelTag = f"panel_{panelId}"
+            if dpg.does_item_exist(panelTag):
+                panelWidth = dpg.get_item_rect_size(panelTag)[0]
+                textWidth = dpg.get_item_rect_size(textTag)[0] or 120
+                if panelWidth:
+                    dpg.set_item_pos(textTag, (max(4, panelWidth - textWidth - RIGHT_MARGIN), 8))
+            dpg.show_item(textTag)
+
+    def setCrossHairMode(self, mode: str):
+        """Crosshair'in kapsamini belirler:
+          hidden -> hicbir panelde gosterilmez
+          single -> SADECE mouse'un ustunde oldugu panelde tam
+                    (dikey+yatay) crosshair gosterilir
+          all    -> (varsayilan) mouse'un ustunde oldugu panelde tam crosshair, TUM
+                    DIGER panellerde ise SADECE dikey cizgi (ayni x/bar) -
+                    "ben hangi paneldeysem digerlerine de gorunsun".
+                    Yatay (y) cizgi digerlerinde YOK: paneller (OHLC/RSI/
+                    MACD gibi) farkli y-olcekleri kullandigi icin ayni y
+                    degeri baska panelde anlamsiz olurdu (Ref3'teki
+                    plot_controller.py'nin CROSSHAIR_ALL'i da boyle calisir)."""
+        mode = str(mode or "").lower()
+        if mode not in ("hidden", "single", "all"):
+            raise ValueError("crosshair mode must be one of: hidden, single, all")
+        self._crossHairMode = mode
+
+    def getCrossHairMode(self):
+        return self._crossHairMode
+
+    def setCrossHairPersist(self, persist: bool):
+        """True (varsayilan) ise mouse hicbir plot'un ustunde degilken
+        crosshair SON bilinen pozisyonda kalir, gizlenmez - infoPanel'in
+        "always" modu gibi surekli gorunur. False ise mouse plot'tan
+        cikar cikmaz crosshair gizlenir."""
+        self._crossHairPersist = bool(persist)
+
+    def getCrossHairPersist(self):
+        return self._crossHairPersist
+
+    def updateCrossHairOverlays(self):
+        """Crosshair'i _crossHairMode/_crossHairPersist bayraklarina gore
+        gunceller - render() tarafindan her frame cagrilir.
+
+        Akis: once mouse'un ustunde oldugu panel + (x,y)'i bul. Bulunduysa
+        _crossHairLastPos'a yaz (mode/persist ne olursa olsun GUNCEL tutulur).
+        Bulunamadiysa (mouse hicbir plotta degil) persist KAPALIYSA son
+        pozisyon unutulur (crosshair gizlenir); ACIKSA son pozisyon
+        KORUNUR (crosshair oldugu yerde kalir).
+
+        Sonra o son pozisyona gore her panel: mode='hidden' -> hep gizli;
+        panel.getCrossHairVisible()==False -> o panel hep gizli (panel
+        bazinda opt-out); mode='single' -> SADECE kaynak panelde tam
+        crosshair; mode='all' -> kaynak panelde tam, digerlerinde sadece
+        dikey (ayni x/bar, bkz. setCrossHairMode)."""
+        if self._crossHairMode == "hidden":
+            self._hideAllCrossHairs()
+            return
+
+        hoveredPanelId, mx, my = self._currentHoverMousePos()
+        if hoveredPanelId is not None:
+            self._crossHairLastPos = (hoveredPanelId, mx, my)
+        elif not self._crossHairPersist:
+            self._crossHairLastPos = None
+
+        pos = self._crossHairLastPos
+        if pos is None:
+            self._hideAllCrossHairs()
+            return
+        sourcePanelId, x, y = pos
+
+        for panelId, panel in self._panels.items():
+            vTag = f"crosshair_v_{panelId}"
+            hTag = f"crosshair_h_{panelId}"
+            if not panel.getCrossHairVisible():
+                self._hideCrossHairTags(vTag, hTag)
+                continue
+            if panelId == sourcePanelId:
+                self._showCrossHairTags(vTag, hTag, x, y)
+            elif self._crossHairMode == "all":
+                self._showCrossHairTags(vTag, hTag, x, y=None)
+            else:
+                self._hideCrossHairTags(vTag, hTag)
+
+    def _currentHoverMousePos(self):
+        """Mouse'un ustunde oldugu (varsa) ilk plot'u ve HAM (x,y) plot-
+        koordinatini dondurur. Hicbir plot hover degilse (None, None, None)."""
+        for panelId in self._panels:
+            plotTag = f"plot_{panelId}"
+            if not dpg.does_item_exist(plotTag) or not dpg.is_item_hovered(plotTag):
+                continue
+            try:
+                mx, my = dpg.get_plot_mouse_pos()
+                return panelId, mx, my
+            except Exception:
+                return panelId, None, None
+        return None, None, None
+
+    def _showCrossHairTags(self, vTag, hTag, x, y=None):
+        """Dikey cizgiyi x'e, (y verilmisse) yatay cizgiyi y'ye ayarlayip
+        gosterir. y=None ise yatay cizgi GIZLI kalir (bkz. updateCrossHairOverlays
+        'all' modundaki digerlerinde-sadece-dikey davranisi)."""
+        if dpg.does_item_exist(vTag):
+            dpg.set_value(vTag, x)
+            dpg.show_item(vTag)
+        if dpg.does_item_exist(hTag):
+            if y is None:
+                dpg.hide_item(hTag)
+            else:
+                dpg.set_value(hTag, y)
+                dpg.show_item(hTag)
+
+    def _hideCrossHairTags(self, vTag, hTag):
+        if dpg.does_item_exist(vTag):
+            dpg.hide_item(vTag)
+        if dpg.does_item_exist(hTag):
+            dpg.hide_item(hTag)
+
+    def _hideAllCrossHairs(self):
+        for panelId in self._panels:
+            self._hideCrossHairTags(f"crosshair_v_{panelId}", f"crosshair_h_{panelId}")
+
+    def _currentHoverInfoIndex(self):
+        """Mouse'un ustunde oldugu (varsa) ilk plot'u ve o plot'taki bar
+        index'ini dondurur. Hicbir plot hover degilse (None, None)."""
+        for panelId in self._panels:
+            plotTag = f"plot_{panelId}"
+            if not dpg.does_item_exist(plotTag) or not dpg.is_item_hovered(plotTag):
+                continue
+            try:
+                mx, _ = dpg.get_plot_mouse_pos()
+                return panelId, int(round(mx))
+            except Exception:
+                return panelId, None
+        return None, None
+
+    def _shouldShowInfoPanel(self, panelId, plotTag, hoveredPanelId=None):
+        """panel.getInfoPanelVisible()==False ise global _infoPanelMode ne
+        olursa olsun gosterilmez (panel bazinda programatik kapatma).
+        (Panelin TUM data'si silinmis/gizlenmisse info panel zaten
+        _pickInfoSourceData None dondugu icin updateInfoOverlays'de ayrica
+        gizlenir - burada tekrar kontrol etmeye gerek yok.)"""
+        panel = self._panels.get(panelId)
+        if panel is not None and not panel.getInfoPanelVisible():
+            return False
+        mode = self._infoPanelMode
+        if mode == "hidden":
+            return False
+        if mode == "always":
+            return True
+        if mode == "active":
+            return panelId == self._infoActivePanelId
+        return panelId == hoveredPanelId or dpg.is_item_hovered(plotTag)
+
+    def _resolveInfoIndex(self, panelId, data, hoveredPanelId=None, hoveredIndex=None):
+        idx = hoveredIndex
+        if idx is None and self._infoPanelMode in ("always", "active"):
+            idx = self._infoSharedIndex
+        if idx is not None:
+            idx = self._clampInfoIndex(data, idx)
+            self._infoLastIndex[panelId] = idx
+            return idx
+        if panelId in self._infoLastIndex:
+            return self._infoLastIndex[panelId]
+        return max(0, self._infoDataLen(data) - 1)
+
+    def _clampInfoIndex(self, data, idx):
+        dataLen = self._infoDataLen(data)
+        if dataLen <= 0:
+            return 0
+        return max(0, min(dataLen - 1, int(idx)))
+
+    def _pickInfoSourceData(self, panel):
+        """Info panelinde gosterilecek 'ana' PanelData'yi secer: once
+        timestamp'i olan gorunur bir seri, yoksa gorunur ILK seri."""
+        for cand in panel.dataList:
+            if cand.isVisible and cand.timestamps:
+                return cand
+        for cand in panel.dataList:
+            if cand.isVisible:
+                return cand
+        return None
+
+    def _infoDataLen(self, d):
+        if d is None:
+            return 0
+        candidates = (
+            getattr(d, "_fullXs", None),
+            getattr(d, "_fullYs", None),
+            getattr(d, "_fullClose", None),
+            getattr(d, "timestamps", None),
+            getattr(d, "xs", None),
+            getattr(d, "ys", None),
+            getattr(d, "close", None),
+        )
+        for seq in candidates:
+            if seq is not None and len(seq) > 0:
+                return len(seq)
+        return 0
+
+    def _buildHoverLabel(self, panel=None, d=None, idx=None):
+        """Secili PanelData (d) + bar index'ine (idx) gore hover_text_{id}
+        icin cok satirli bir readout metni kurar.
+
+        panel.getInfoFields() ile ozel bir alan listesi verilmisse ONU
+        kullanir (index/date/time + OHLC/volume/size + dataList'teki isimle
+        eslesen herhangi bir seri); verilmemisse (None = auto-detect)
+        index/date/(intraday ise time) + OHLC/volume/size/diff/change +
+        TUM gorunur line serilerini otomatik listeler. Ref3'teki
+        _build_hover_label ile ayni."""
+        dataLen = self._infoDataLen(d)
+        valid = d is not None and idx is not None and 0 <= idx < dataLen
+        hasTimestamp = valid and bool(getattr(d, "timestamps", None)) and idx < len(d.timestamps)
+        isIntraday = getattr(d, "isIntraday", True) if d is not None else True
+
+        def attr(name):
+            return getattr(d, name, None) if d is not None else None
+
+        def val(seqName, fullName, fmt):
+            seq = attr(seqName)
+            fullArr = attr(fullName) if fullName else None
+            src = fullArr if fullArr is not None else seq
+            if not valid or src is None or idx >= len(src):
+                return "..."
+            v = src[idx]
+            try:
+                if fmt == "d":
+                    return format(int(v), fmt)
+                return format(float(v), fmt)
+            except (TypeError, ValueError):
+                return "..."
+
+        def num(seqName, fullName):
+            seq = attr(seqName)
+            fullArr = attr(fullName) if fullName else None
+            src = fullArr if fullArr is not None else seq
+            if not valid or src is None or idx >= len(src):
+                return None
+            try:
+                return float(src[idx])
+            except (TypeError, ValueError):
+                return None
+
+        def diffVal():
+            o = num("open", "_fullOpen")
+            c = num("close", "_fullClose")
+            if o is None or c is None:
+                return "..."
+            return f"{c - o:.2f}"
+
+        def changeVal():
+            o = num("open", "_fullOpen")
+            c = num("close", "_fullClose")
+            if o is None or c is None:
+                return "..."
+            pct = ((c - o) / o * 100.0) if o else 0.0
+            return f"{pct:.2f}%"
+
+        def yVal(series):
+            fullYs = getattr(series, "_fullYs", None)
+            ys = getattr(series, "ys", None)
+            src = fullYs if fullYs is not None else ys
+            if not valid or src is None or idx >= len(src):
+                return "..."
+            try:
+                return f"{float(src[idx]):.2f}"
+            except (TypeError, ValueError):
+                return "..."
+
+        idxStr = str(idx) if valid else "..."
+        dateStr = "..."
+        timeStr = "..."
+        if hasTimestamp:
+            ts = d.timestamps[idx]
+            if hasattr(ts, "strftime"):
+                dateStr = ts.strftime("%d.%m.%Y")
+                timeStr = ts.strftime("%H:%M")
+            else:
+                dateStr = str(ts)
+
+        infoFields = panel.getInfoFields() if panel is not None else None
+        if infoFields is not None:
+            fieldMap = {
+                "open": ("Open", ".2f", "open", "_fullOpen"),
+                "high": ("High", ".2f", "high", "_fullHigh"),
+                "low": ("Low", ".2f", "low", "_fullLow"),
+                "close": ("Close", ".2f", "close", "_fullClose"),
+                "volume": ("Volume", ".0f", "volume", "_fullVolume"),
+                "size": ("Size", "d", "size", None),
+            }
+            rows = []
+            for field in infoFields:
+                if field == "index":
+                    rows.append(("Index", idxStr))
+                elif field == "date":
+                    rows.append(("Date", dateStr))
+                elif field == "time":
+                    if isIntraday:
+                        rows.append(("Time", timeStr))
+                elif field in fieldMap:
+                    label, fmt, seqName, fullName = fieldMap[field]
+                    rows.append((label, val(seqName, fullName, fmt)))
+                elif panel is not None:
+                    for series in panel.dataList:
+                        if series.name == field and series.isVisible:
+                            rows.append((field, yVal(series)))
+                            break
+        else:
+            rows = [("Index", idxStr), ("Date", dateStr)]
+            if isIntraday:
+                rows.append(("Time", timeStr))
+            rows.append(None)
+
+            hasOhlc = d is not None and bool(getattr(d, "open", None))
+            if hasOhlc:
+                rows += [
+                    ("Open", val("open", "_fullOpen", ".2f")),
+                    ("High", val("high", "_fullHigh", ".2f")),
+                    ("Low", val("low", "_fullLow", ".2f")),
+                    ("Close", val("close", "_fullClose", ".2f")),
+                    ("Volume", val("volume", "_fullVolume", ".0f")),
+                    ("Size", val("size", None, "d")),
+                    None,
+                    ("Diff", diffVal()),
+                    ("Change", changeVal()),
+                    None,
+                ]
+                if panel is not None:
+                    for series in panel.dataList:
+                        if series.isVisible and series.dataType == "line":
+                            rows.append((series.name, yVal(series)))
+            elif panel is not None:
+                for series in panel.dataList:
+                    if series.isVisible:
+                        rows.append((series.name, yVal(series)))
+
+        realRows = [r for r in rows if r is not None]
+        if not realRows:
+            return ""
+        nameW = max(len(name) for name, _ in realRows)
+        valW = max(len(str(value)) for _, value in realRows)
+        sepLine = "-" * (nameW + 3 + valW + 1)
+        return "\n".join(
+            sepLine if row is None else f"{row[0]:<{nameW}} : {row[1]}"
+            for row in rows
+        )
+
     # ------------------------------------------------------------- periyodik
     def sync(self):
         """Model <-> UI senkronu: daha once drawPanel ile cizilmis ama artik
@@ -542,10 +1003,17 @@ class PanelManager:
         datetime x-ekseni modundayken her frame updateXAxisTicks() da
         cagrilir - zoom/pan ile gorunur bar araligi degistikce tick'ler
         bar modundaki gibi dinamik guncellenir (degisiklik yoksa
-        _lastAxisTicksSignature sayesinde gercek DPG cagrisi yapilmaz)."""
+        _lastAxisTicksSignature sayesinde gercek DPG cagrisi yapilmaz).
+        updateInfoOverlays() da her frame cagrilir - hover_text_{id}
+        readout'lari mouse/mod degisikligine gore guncel kalir.
+        updateMousePosOverlays() ham (x,y) mouse-pos metnini gunceller.
+        updateCrossHairOverlays() panel basina crosshair'i gunceller."""
         self.sync()
         if self._xAxisMode == "datetime":
             self.updateXAxisTicks()
+        self.updateInfoOverlays()
+        self.updateMousePosOverlays()
+        self.updateCrossHairOverlays()
         now = time.time()
         if now - self._lastRenderPrint >= 1.0:
             self._lastRenderPrint = now

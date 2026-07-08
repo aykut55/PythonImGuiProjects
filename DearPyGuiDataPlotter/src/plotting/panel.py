@@ -31,6 +31,8 @@ class Panel:
         # Her oge: {"value", "vertical", "color", "thickness", "label"}. Cizim PanelManager'da.
         self.levels: list[dict] = []
         self._infoFields = None  # None = auto-detect
+        self._infoPanelVisible = True  # bkz. setInfoPanelVisible - PanelManager._shouldShowInfoPanel bunu okur
+        self._crossHairVisible = True  # bkz. setCrossHairVisible - henuz bir cizim tuketicisi yok, programatik kontrol icin hazir
         self.ySyncMode = "fitVisibleData"
         self.ySyncId = None
         self.yFixedRange = None
@@ -229,6 +231,25 @@ class Panel:
 
     def getInfoFields(self):
         return self._infoFields
+
+    def setInfoPanelVisible(self, visible: bool):
+        """Bu panelin info panelini (hover_text_{id}) programatik olarak
+        acar/kapatir - varsayilan True. PanelManager._shouldShowInfoPanel
+        bunu global _infoPanelMode'dan (hidden/hover/active/always) ONCE
+        kontrol eder: False ise mod ne olursa olsun gosterilmez."""
+        self._infoPanelVisible = bool(visible)
+
+    def getInfoPanelVisible(self):
+        return self._infoPanelVisible
+
+    def setCrossHairVisible(self, visible: bool):
+        """Bu panelin crosshair'ini programatik olarak acar/kapatir -
+        varsayilan True. Henuz bir cizim tuketicisi yok (crosshair cizimi
+        ileride eklenecek), bayrak simdiden hazir."""
+        self._crossHairVisible = bool(visible)
+
+    def getCrossHairVisible(self):
+        return self._crossHairVisible
 
     def getId(self): return self.id
     def getName(self): return self.name
