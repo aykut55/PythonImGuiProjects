@@ -21,7 +21,7 @@ class GuiManager:
 
     MARGIN = 7
     TOP_OFFSET = 40
-    TOP_HEIGHT = 100
+    TOP_HEIGHT = 135  # topPanelGroupBox3'teki ayrac+2 buton satiri+durum metni digerlerinden fazla yer istedigi icin artirildi (scrollbar cikiyordu)
     BOTTOM_HEIGHT = 60
     LEFT_WIDTH = 300
     RIGHT_WIDTH = 520
@@ -32,6 +32,17 @@ class GuiManager:
     PANEL_PADDING = (10, 10)
     PANEL_TAGS = ("topPanel", "centerPanel", "bottomPanel")
     CENTER_TOP_HEIGHT = 190  # RangeSlider/HScrollBar icin ayrilan ust bant (scrollbar kirpilmiyordu, artirildi)
+
+    # top_view_n_input/top_view_n2_input BIRDEN FAZLA mod tarafindan
+    # PAYLASILIYOR (DataManager'daki n1/n2 gibi) - hangi modun hangi
+    # alani kullandigi + alan->tag eslesmesi (bkz. _saveTopViewModeValues/
+    # _restoreTopViewModeValues/seedTopViewRangeInputs).
+    TOP_VIEW_MODE_FIELDS = {
+        "Last N Data": ("n",),
+        "First N Data": ("n",),
+        "Range": ("n", "n2"),
+    }
+    TOP_VIEW_FIELD_TAGS = {"n": "top_view_n_input", "n2": "top_view_n2_input"}
 
     def __init__(self, configManager):
         self.configManager = configManager
@@ -75,6 +86,8 @@ class GuiManager:
                                      StockDataReader=StockDataReader, FilterMode=FilterMode,
                                      IndicatorManager=IndicatorManager)
         self._renderLoopStarted = False
+        self._topViewModeValues = {}  # {mode: {field: value}} - bkz. seedTopViewRangeInputs/_saveTopViewModeValues
+        self._lastTopViewMode = "FitToScreen (Normal)"  # _onTopViewModeChanged'in "cikilan mod" takibi
         self.isDarkTheme = True
         self.lightTheme = self._buildLightTheme()
         self.panelTheme = self._buildPanelTheme()
@@ -145,6 +158,8 @@ class GuiManager:
         self.panelManager.render()
         self.leftMenuPanel.render()
         self.panelManagerWindow.render()
+        self._refreshActivePanelCombo()
+        self._alignTopViewNRow()
 
     def sync(self):
         """Model<->UI senkronunu manuel tetiklemek icin (render() zaten her
@@ -153,6 +168,106 @@ class GuiManager:
         self.panelManager.sync()
         self.leftMenuPanel.sync()
         self.panelManagerWindow.sync()
+        self._refreshActivePanelCombo()
+
+    def _onActiveUpdateModeChanged(self, sender=None, appData=None):
+        self.panelManager.setActiveUpdateMode((appData or "hover").lower())
+
+    def _onTopViewModeChanged(self, sender=None, appData=None):
+        """SADECE gorsel: secili moda gore N/N2 input'larini gosterir/gizler
+        (Ref1'deki _on_view_mode_changed ile ayni). Apply butonuna henuz
+        BAGLANMADI - x/y eksenine gercekten bir sey uygulamiyor.
+
+        N/N2 kutulari Last N Data/First N Data/Range arasinda PAYLASILIYOR
+        (DataManager'daki n1/n2 gibi) - mod degismeden ONCE cikilan modun
+        degerini hafizaya alip (_saveTopViewModeValues), yeni modun
+        hafizadaki degerini geri yukluyoruz (_restoreTopViewModeValues) ki
+        kullanicinin girdigi deger baska bir moda gecince KAYBOLMASIN."""
+        self._saveTopViewModeValues(self._lastTopViewMode)
+        showN = appData in ("Last N Data", "First N Data", "Range")
+        showN2 = appData == "Range"
+        dpg.configure_item("top_view_n_input", show=showN)
+        dpg.configure_item("top_view_n2_input", show=showN2)
+        self._restoreTopViewModeValues(appData)
+        self._lastTopViewMode = appData
+
+    def _onTopPanModeChanged(self, sender=None, appData=None):
+        """SADECE gorsel: 'UserDefined' secilince adim input'unu gosterir
+        (Ref1'deki _on_pan_mode_changed ile ayni). Yon butonlarina henuz
+        BAGLANMADI - gercekten pan/kaydirma yapmiyor."""
+        dpg.configure_item("top_pan_step_input", show=(appData == "UserDefined"))
+
+    def _saveTopViewModeValues(self, mode):
+        fields = self.TOP_VIEW_MODE_FIELDS.get(mode, ())
+        if not fields:
+            return
+        values = self._topViewModeValues.setdefault(mode, {})
+        for field in fields:
+            tag = self.TOP_VIEW_FIELD_TAGS[field]
+            if dpg.does_item_exist(tag):
+                values[field] = dpg.get_value(tag)
+
+    def _restoreTopViewModeValues(self, mode):
+        values = self._topViewModeValues.get(mode)
+        if not values:
+            return
+        for field, value in values.items():
+            tag = self.TOP_VIEW_FIELD_TAGS[field]
+            if dpg.does_item_exist(tag):
+                dpg.set_value(tag, value)
+
+    def seedTopViewRangeInputs(self, barCount):
+        """View/Range moduna gore sensible varsayilanlari yazar: Last N
+        Data/First N Data -> 1000, Range -> 0..barCount. DataManager'daki
+        _seedReadModeInputs ile AYNI fikir: SADECE data yuklendikten sonra
+        BIR KEZ (scripts/default.py'den) cagrilmasi beklenir - duz combo
+        mod degisimi bunu ASLA tetiklemez, kullanicinin sonradan girdigi
+        deger boylece korunur. Reset/yeniden yukleme = bu yeniden cagrilir."""
+        barCount = int(barCount or 0)
+        self._topViewModeValues = {
+            "Last N Data": {"n": 1000},
+            "First N Data": {"n": 1000},
+            "Range": {"n": 0, "n2": barCount},
+        }
+        currentMode = dpg.get_value("top_view_mode_combo") if dpg.does_item_exist("top_view_mode_combo") else ""
+        self._restoreTopViewModeValues(currentMode)
+
+    def _alignTopViewNRow(self):
+        """top_view_n_row'u (N/N2 kutulari) top_view_mode_combo ile SOLDAN
+        hizalar. Her frame GuiManager.render()'dan cagrilir (once bir kerelik
+        dpg.set_frame_callback denendi ama GuiManager._scheduleRenderLoop
+        de AYNI frame numarasina kendi callback'ini kaydettigi icin DPG'nin
+        'frame basina tek callback' kisitlamasinda bizimki eziliyordu - bu
+        yuzden zaten her frame calisan render() dongusune tasindi).
+
+        X: top_view_mode_combo'nun GERCEK x konumu (dpg.get_item_pos).
+        Y: top_view_row1'in (View / Range + combo + Apply satiri) GERCEK alt
+        kenari (pos.y + rect_size.y) + kucuk bir bosluk - boylece satirlar
+        UST USTE BINMEZ, N/N2 dogru sekilde bir alt satirda kalir."""
+        if not (dpg.does_item_exist("top_view_mode_combo")
+                and dpg.does_item_exist("top_view_n_row")
+                and dpg.does_item_exist("top_view_row1")):
+            return
+        comboX = dpg.get_item_pos("top_view_mode_combo")[0]
+        row1Y = dpg.get_item_pos("top_view_row1")[1]
+        row1H = dpg.get_item_rect_size("top_view_row1")[1]
+        dpg.set_item_pos("top_view_n_row", (comboX, row1Y + row1H + 4))
+
+    def _refreshActivePanelCombo(self):
+        """active_panel_plot_combo'yu panelManager'daki GUNCEL panel
+        listesiyle + panelManager.getActivePanelId() ile GUNCEL aktif
+        panelle senkronlar. Combo'ya callback BAGLANMADI - kullanicinin
+        elle sectigi bir deger bir sonraki bu cagrida GERI YAZILIR, yani
+        bu SADECE bir gosterge, aktif paneli degistirmek icin kullanilamaz
+        (Hover/Click modunu bypass etmez)."""
+        panels = list(self.panelManager.iterateAllPanels())
+        labels = [f"Panel {p.id}: {p.name}" for p in panels] or ["None"]
+        activeId = self.panelManager.getActivePanelId()
+        activeLabel = next((f"Panel {p.id}: {p.name}" for p in panels if p.id == activeId),
+                           "None")
+        if dpg.does_item_exist("active_panel_plot_combo"):
+            dpg.configure_item("active_panel_plot_combo", items=labels)
+            dpg.set_value("active_panel_plot_combo", activeLabel)
 
     def buildLayout(self, layoutId=0):
         self.destroyLayout()
@@ -175,7 +290,93 @@ class GuiManager:
 
         with dpg.child_window(tag="topPanel", parent=self.LAYOUT_ROOT,
                               no_scrollbar=True, **geometry["topPanel"]):
-            dpg.add_text("Top Panel")
+            # Ref3'teki drawTopPanel() gibi yan yana grup-box'lar (child_window,
+            # border=True) halinde kurgulanacak - once tek kutu (topPanelGroupBox1),
+            # gorsel olarak onaylaninca digerleri eklenecek.
+            with dpg.group(horizontal=True):
+                with dpg.child_window(tag="topPanelGroupBox1", width=350, height=-1, border=True):
+                    # Ref3'teki drawTopPanel() 1. satirinin denenen yerlesimi:
+                    # "Active Panel [byCombo] [Combobox]" - UCU AYNI satirda.
+                    with dpg.group(horizontal=True):
+                        dpg.add_text("Active Panel")
+                        dpg.add_combo(tag="active_update_mode_combo", items=["Hover", "Click"],
+                                     default_value="Hover", width=90,
+                                     callback=self._onActiveUpdateModeChanged)
+                        # callback YOK: bu combo SADECE gosterge - itemlari/
+                        # secili degeri her frame _refreshActivePanelCombo()
+                        # tarafindan panelManager'daki GERCEK aktif panele
+                        # gore yazilir; kullanicinin elle secim yapmasi
+                        # aktif paneli DEGISTIRMEZ (Hover/Click'i bypass etmez).
+                        dpg.add_combo(tag="active_panel_plot_combo", items=["None"],
+                                     default_value="None", width=150)
+                    # Ref3'teki drawTopPanel() 4. satiri: View / Range.
+                    # SADECE GORSEL - Apply butonu bilerek EVENT YOK (henuz
+                    # baglanmadi). Tek istisna: mode combosunun N/N2 input'lari
+                    # gosterip gizlemesi (Ref1'deki _on_view_mode_changed ile
+                    # ayni davranis) - "combo degisince nasil gorunuyor" testi.
+                    #
+                    # "View / Range" etiketinin SAGINDA (ayni satirda) combo+Apply;
+                    # N/N2 bir ALTTAKI satirda. Konum PIKSEL TAHMINI DEGIL -
+                    # her frame combo'nun GERCEK x'i + bu satirin GERCEK
+                    # alt kenari olculup otomatik uygulanir (bkz. _alignTopViewNRow,
+                    # GuiManager.render()'dan cagrilir).
+                    with dpg.group(horizontal=True, tag="top_view_row1"):
+                        dpg.add_text("View / Range")
+                        topViewModes = ["FitToScreen (Normal)", "FitToScreen (Wide)",
+                                       "FitToScreen (Ultra)", "Full Data", "Last N Data",
+                                       "First N Data", "Range"]
+                        dpg.add_combo(tag="top_view_mode_combo", items=topViewModes,
+                                     default_value=topViewModes[0], width=150,
+                                     callback=self._onTopViewModeChanged)
+                        dpg.add_button(label="Apply", width=60)
+                    with dpg.group(horizontal=True, tag="top_view_n_row", pos=(0, 0)):
+                        dpg.add_input_int(tag="top_view_n_input", label="N", step=0,
+                                         default_value=0, width=70, show=False)
+                        dpg.add_input_int(tag="top_view_n2_input", label="N2", step=0,
+                                         default_value=0, width=70, show=False)
+
+                with dpg.child_window(tag="topPanelGroupBox2", width=340, height=-1, border=True):
+                    # Ref3'teki drawTopPanel() 5. satiri: Pan Controls.
+                    # SADECE GORSEL - yon butonlarina (|< Basa/<< Sol/Sag >>/
+                    # Son >|) bilerek EVENT YOK. Tek istisna: mode combosunun
+                    # "UserDefined" secilince adim input'unu gostermesi
+                    # (View/Range'deki N/N2 testiyle ayni fikir).
+                    with dpg.group(horizontal=True, tag="top_pan_row1"):
+                        dpg.add_text("Pan Controls")
+                        panModes = ["VisibleScreenWidth", "1 Bar", "10 Bar",
+                                   "100 Bar", "1000 Bar", "UserDefined"]
+                        dpg.add_combo(tag="top_pan_mode_combo", items=panModes,
+                                     default_value=panModes[0], width=150,
+                                     callback=self._onTopPanModeChanged)
+                        dpg.add_input_int(tag="top_pan_step_input", step=0,
+                                         default_value=100, width=70, show=False)
+                    with dpg.group(horizontal=True):
+                        dpg.add_button(label="|< Basa", width=70)
+                        dpg.add_button(label="<< Sol", width=70)
+                        dpg.add_button(label="Sag >>", width=70)
+                        dpg.add_button(label="Son >|", width=70)
+                        dpg.add_text("", tag="top_pan_position_text")
+
+                with dpg.child_window(tag="topPanelGroupBox3", width=330, height=-1, border=True):
+                    # Ref3'teki drawTopPanel() 3. satirinin bir kismi: Read Src
+                    # Params / Apply Params To Other. SADECE GORSEL - ikisi de
+                    # bilerek EVENT YOK (henuz PlotController/eksen okuma-yazma
+                    # katmani yok, bkz. docs/todo.md).
+                    with dpg.group(horizontal=True):
+                        dpg.add_button(label="Read Params (src)", width=140)
+                        dpg.add_button(label="Apply Params (dst)", width=140)
+                    # Ref3'teki drawTopPanel() 6. satiri: Adjust Src Y / Adjust
+                    # All Y Axes. SADECE GORSEL - EVENT YOK (ayni sebep: eksen
+                    # okuma-yazma katmani yok). "Adjust All Y" fikri zaten
+                    # PanelManagerWindow'da da placeholder olarak var, tag
+                    # cakismasin diye buradakiler "top_" onekiyle.
+                    with dpg.group(horizontal=True):
+                        dpg.add_button(label="Adjust Y Axis (src)", width=140)
+                        dpg.add_button(label="Adjust Y Axis (all)", width=140)
+                    dpg.add_text("", tag="top_visible_window_text")
+        dpg.bind_item_theme("topPanelGroupBox1", self._buildCompactControlTheme())
+        dpg.bind_item_theme("topPanelGroupBox2", self._buildCompactControlTheme())
+        dpg.bind_item_theme("topPanelGroupBox3", self._buildCompactControlTheme())
 
         with dpg.child_window(tag="centerPanel", parent=self.LAYOUT_ROOT,
                               **geometry["centerPanel"]):
@@ -357,6 +558,26 @@ class GuiManager:
             with dpg.theme_component(dpg.mvChildWindow):
                 dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, *self.PANEL_PADDING, category=dpg.mvThemeCat_Core)
         return panelTheme
+
+    def _buildCompactControlTheme(self):
+        """topPanel "main_window" altinda oldugu icin _buildMenuBarHeightTheme'in
+        FramePadding=(8,11)'ini (mvAll) MIRAS ALIYOR - combo/buton gibi
+        kontroller DataManager'daki (ayri, temasiz bir pencerede olan)
+        gibi degil, gereksiz yere UZUN gorunuyordu. Bu tema FramePadding'i
+        DPG'nin varsayilanina (4,3) dondurup topPanelGroupBox1 (ve
+        cocuklarina) baglaniyor - DataManager'daki combo ile ayni yukseklik.
+
+        mvInputText icin AYRICA ozel bir kural ekliyoruz: main_window'daki
+        _buildMenuBarHeightTheme'in mvInputText'e ozel (10,11) kurali, mvAll'dan
+        DAHA SPESIFIK oldugu icin mvAll'i EZIP input_text kutularini (top_view_n_input/
+        top_view_n2_input) hala kalin gosteriyordu - buraya da ayni derecede
+        spesifik bir mvInputText kurali eklemek gerekti (nearest-wins)."""
+        with dpg.theme() as compactControlTheme:
+            with dpg.theme_component(dpg.mvAll):
+                dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 4, 3, category=dpg.mvThemeCat_Core)
+            with dpg.theme_component(dpg.mvInputText):
+                dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 4, 3, category=dpg.mvThemeCat_Core)
+        return compactControlTheme
 
     def _buildLightTheme(self):
         with dpg.theme() as lightTheme:

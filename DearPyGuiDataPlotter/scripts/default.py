@@ -331,6 +331,13 @@ class App:
         #   pm.setXAxisMode("datetime", "%d.%m.%Y")            # sadece tarih
         pm.setXAxisMode("datetime", "auto")                    # isIntraday'e gore: intraday->sadece saat, degilse->sadece tarih
 
+        # topPanel'deki View/Range (Last N Data/First N Data/Range) N/N2
+        # kutularinin varsayilanlarini bu Run'daki bar sayisina gore
+        # BIR KEZ ilkler (Last/First N -> 1000, Range -> 0..barCount).
+        # Sonrasinda kullanicinin girdigi deger combo mod degisiminde
+        # KAYBOLMAZ - sadece yeni bir Run (yeniden data yukleme) resetler.
+        gm.seedTopViewRangeInputs(len(self.xs))
+
         gm.leftMenuPanel.refresh()
         gm.poolPanel.refresh()
 

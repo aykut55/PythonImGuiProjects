@@ -33,6 +33,8 @@ class PanelManager:
         self._crossHairMode = "all"  # hidden | single | all - varsayilan "all": infoPanel gibi TUM panellerde surekli (bkz. setCrossHairMode)
         self._crossHairPersist = True  # varsayilan True: mouse plot'tan cikinca crosshair SON pozisyonda kalir, gizlenmez - infoPanel'in "always" modu gibi surekli gorunur (bkz. setCrossHairPersist)
         self._crossHairLastPos = None  # (kaynakPanelId, x, y) - persist ve "all" modunun paylastigi son bilinen konum
+        self._activeUpdateMode = "hover"  # hover | click - "aktif panel" hangi etkilesimle degisecek (bkz. setActiveUpdateMode)
+        self._activePanelId = None  # su an "aktif" sayilan panelin id'si (bkz. updateActivePanel/_onPlotClicked)
 
     def createPanel(self, name, caption="", parent="", alignment=None):
         """Otomatik id ile YALNIZCA bir Panel olusturur, DONDURUR - panelManager'a
@@ -568,13 +570,17 @@ class PanelManager:
         # DPG'nin yerlesik cift-tikla-fit'i (fit_button, varsayilan sol tik)
         # TIGHT (payisiz) bir sinira resetliyor - bizim _applyAxisPadding
         # dolgusunu ezip gecirdigi icin cift tiklamayi yakalayip PADDING'i
-        # geri uyguluyoruz (bkz. _onPlotDoubleClicked).
+        # geri uyguluyoruz (bkz. _onPlotDoubleClicked). Ayni registry'ye tek
+        # tiklama handler'i da eklendi - "click" modunda aktif paneli secer
+        # (bkz. _onPlotClicked/setActiveUpdateMode).
         registryTag = f"plot_dclick_registry_{panel.id}"
         if dpg.does_item_exist(registryTag):
             dpg.delete_item(registryTag)
         with dpg.item_handler_registry(tag=registryTag):
             dpg.add_item_double_clicked_handler(callback=self._onPlotDoubleClicked,
                                                user_data=panel.id)
+            dpg.add_item_clicked_handler(callback=self._onPlotClicked,
+                                        user_data=panel.id)
         dpg.bind_item_handler_registry(plotTag, registryTag)
 
     def _onPlotDoubleClicked(self, sender=None, appData=None, userData=None):
@@ -845,6 +851,46 @@ class PanelManager:
         for panelId in self._panels:
             self._hideCrossHairTags(f"crosshair_v_{panelId}", f"crosshair_h_{panelId}")
 
+    # ----------------------------------------------------------- aktif panel
+    def setActiveUpdateMode(self, mode: str):
+        """"Aktif panel" (getActivePanelId) hangi etkilesimle guncellenecek:
+          hover -> mouse hangi plot'un uzerindeyse o AN aktif olur (mouse
+                   ayrilinca SON aktif panel korunur, "None"e dusmez)
+          click -> SADECE kullanici bir plot'a tikladiginda degisir (hover
+                   etkisiz)."""
+        mode = str(mode or "").lower()
+        if mode not in ("hover", "click"):
+            raise ValueError("active update mode must be 'hover' or 'click'")
+        self._activeUpdateMode = mode
+
+    def getActiveUpdateMode(self):
+        return self._activeUpdateMode
+
+    def getActivePanelId(self):
+        return self._activePanelId
+
+    def updateActivePanel(self):
+        """render() tarafindan her frame cagrilir. Sadece 'hover' modunda is
+        yapar - mouse'un ustunde oldugu plot'u bulup _activePanelId'i onunla
+        gunceller (bulunamazsa - mouse hicbir plotta degil - SON deger
+        korunur). 'click' modunda hicbir sey yapmaz, degisiklik SADECE
+        _onPlotClicked'tan (kullanici tiklayinca) gelir."""
+        if self._activeUpdateMode != "hover":
+            return
+        for panelId in self._panels:
+            plotTag = f"plot_{panelId}"
+            if dpg.does_item_exist(plotTag) and dpg.is_item_hovered(plotTag):
+                self._activePanelId = panelId
+                return
+
+    def _onPlotClicked(self, sender=None, appData=None, userData=None):
+        """_buildPanelUi'da her panelin plot'una baglanan tiklama handler'i.
+        SADECE 'click' modundayken _activePanelId'i degistirir (hover
+        modundayken tiklamanin bir etkisi yok - updateActivePanel zaten
+        surekli gunceller)."""
+        if self._activeUpdateMode == "click":
+            self._activePanelId = userData
+
     def _currentHoverInfoIndex(self):
         """Mouse'un ustunde oldugu (varsa) ilk plot'u ve o plot'taki bar
         index'ini dondurur. Hicbir plot hover degilse (None, None)."""
@@ -1093,13 +1139,15 @@ class PanelManager:
         updateInfoOverlays() da her frame cagrilir - hover_text_{id}
         readout'lari mouse/mod degisikligine gore guncel kalir.
         updateMousePosOverlays() ham (x,y) mouse-pos metnini gunceller.
-        updateCrossHairOverlays() panel basina crosshair'i gunceller."""
+        updateCrossHairOverlays() panel basina crosshair'i gunceller.
+        updateActivePanel() 'hover' modundaysa aktif paneli gunceller."""
         self.sync()
         if self._xAxisMode == "datetime":
             self.updateXAxisTicks()
         self.updateInfoOverlays()
         self.updateMousePosOverlays()
         self.updateCrossHairOverlays()
+        self.updateActivePanel()
         now = time.time()
         if now - self._lastRenderPrint >= 1.0:
             self._lastRenderPrint = now
