@@ -106,6 +106,35 @@ class Panel:
         for data in self.dataList:
             data.setVisible(True)
 
+    # --- Data sirasi (Data Order kontrolleri) ---
+    def _findDataIndex(self, dataId):
+        for i, d in enumerate(self.dataList):
+            if d.id == dataId:
+                return i
+        return None
+
+    def swapDataUp(self, dataId):
+        """dataId'li PanelData'yi dataList icinde bir yukari (bir onceki
+        index'e) tasir (cizim/legend sirasini degistirir)."""
+        idx = self._findDataIndex(dataId)
+        if idx is None or idx <= 0:
+            return
+        self.dataList[idx - 1], self.dataList[idx] = self.dataList[idx], self.dataList[idx - 1]
+
+    def swapDataDown(self, dataId):
+        """dataId'li PanelData'yi dataList icinde bir asagi tasir."""
+        idx = self._findDataIndex(dataId)
+        if idx is None or idx >= len(self.dataList) - 1:
+            return
+        self.dataList[idx], self.dataList[idx + 1] = self.dataList[idx + 1], self.dataList[idx]
+
+    def resetDataOrder(self):
+        """dataList'i data id'sine gore artan sirada duzenler. Ayri bir
+        'olusturulma sirasi' kaydi tutulmuyor (panelManager._panelOrder'in
+        aksine) - id'ler genelde ekleme sirasiyla artan oldugundan id'ye
+        gore sort yeterli (Ref1/Ref3'teki reset_data_order ile ayni)."""
+        self.dataList.sort(key=lambda d: d.id)
+
     # --- Seviye cizgileri (drag_line): veri DEGIL, plot dekorasyonu (MODEL) ---
     def _addLevel(self, value, vertical, color, thickness, label):
         level = {"value": float(value), "vertical": bool(vertical),

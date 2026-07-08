@@ -16,6 +16,9 @@
         "poolPanel": {
             "initialCoordinates": {"x": 1000, "y": 147, "width": 420, "height": 600}
         },
+        "panelManagerWindow": {
+            "initialCoordinates": {"x": 550, "y": 100, "width": 700, "height": 900}
+        },
         "consolePanel": {
             "initialCoordinates": {"x": 1546, "y": 705, "width": 520, "height": 261}
         }

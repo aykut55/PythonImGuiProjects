@@ -7,6 +7,7 @@ from .menuBar import MenuBar
 from .panel import Panel
 from .panelData import PanelData
 from .panelManager import PanelManager
+from .panelManagerWindow import PanelManagerWindow
 from .poolDataManager import PoolDataManager
 from .poolPanel import PoolPanel
 from .scriptPanel import ScriptPanel
@@ -58,6 +59,12 @@ class GuiManager:
         # ayri pencereye alindi.
         self.poolPanel = PoolPanel()
         self.poolPanel.setPoolDataManager(self.poolDataManager)
+        # PanelManagerWindow: PoolPanel gibi bagimsiz/floating pencere - hicbir
+        # slotu isgal etmez. Col1/2/3 + Data Ops/Hide-Show/Order gercek
+        # panelManager modeline bagli; Global Data Actions/View-Range/Pan
+        # Controls hala placeholder.
+        self.panelManagerWindow = PanelManagerWindow()
+        self.panelManagerWindow.setPanelManager(self.panelManager)
         self.scriptPanel.set_globals(gm=self, pm=self.panelManager, pool=self.poolDataManager,
                                      Panel=Panel, PanelData=PanelData,
                                      StockDataReader=StockDataReader, FilterMode=FilterMode,
@@ -74,6 +81,7 @@ class GuiManager:
             on_toggle_console=self.consolePanel.toggle,
             on_toggle_left_menu=self.toggleLeftMenu,
             on_toggle_pool=self.togglePoolPanel,
+            on_manage_panels=self.togglePanelManagerWindow,
             on_manage_data=self.toggleDataManager,
             on_command_query=self._onCommandQuery,
         )
@@ -85,6 +93,7 @@ class GuiManager:
             ("Toggle Console Panel", self.consolePanel.toggle),
             ("Toggle Left Menu", self.toggleLeftMenu),
             ("Toggle Pool Panel", self.togglePoolPanel),
+            ("Toggle Panel Manager Window", self.togglePanelManagerWindow),
             ("Toggle Data Manager", self.toggleDataManager),
         ]
 
@@ -129,12 +138,14 @@ class GuiManager:
         delege ediyor; ileride baska bilesenler eklendikce buraya eklenir."""
         self.panelManager.render()
         self.leftMenuPanel.render()
+        self.panelManagerWindow.render()
 
     def sync(self):
         """Model<->UI senkronunu manuel tetiklemek icin (render() zaten her
         frame otomatik yapiyor)."""
         self.panelManager.sync()
         self.leftMenuPanel.sync()
+        self.panelManagerWindow.sync()
 
     def buildLayout(self, layoutId=0):
         self.destroyLayout()
@@ -147,7 +158,8 @@ class GuiManager:
         dpg.delete_item(self.LAYOUT_ROOT, children_only=True)
         for tag in (ScriptPanel.TAG, ScriptPanel.OPEN_DIALOG, ScriptPanel.SAVEAS_DIALOG,
                    DataManager.TAG, DataManager.FILE_DIALOG, DataManager.TREE_HANDLER,
-                   DataManager.KEY_HANDLER, LeftMenuPanel.TAG, PoolPanel.TAG):
+                   DataManager.KEY_HANDLER, LeftMenuPanel.TAG, PoolPanel.TAG,
+                   PanelManagerWindow.TAG):
             if dpg.does_item_exist(tag):
                 dpg.delete_item(tag)
 
@@ -196,6 +208,14 @@ class GuiManager:
         self.poolPanel.build(p["x"], p["y"], p["width"], p["height"],
                              onClose=self._relayout)
         dpg.bind_item_theme(PoolPanel.TAG, self.panelTheme)
+
+        # PanelManagerWindow da PoolPanel gibi bagimsiz/floating: hicbir
+        # slotu isgal etmez, sadece ilk build'de config'teki baslangic
+        # konumunu alir.
+        pmw = self._panelInitialCoords("panelManagerWindow")
+        self.panelManagerWindow.build(pmw["x"], pmw["y"], pmw["width"], pmw["height"],
+                                      onClose=self._relayout)
+        dpg.bind_item_theme(PanelManagerWindow.TAG, self.panelTheme)
 
         dpg.set_viewport_resize_callback(self._relayout)
 
@@ -273,6 +293,9 @@ class GuiManager:
 
     def togglePoolPanel(self):
         self.poolPanel.toggle()
+
+    def togglePanelManagerWindow(self):
+        self.panelManagerWindow.toggle()
 
     def _onCommandQuery(self, query):
         if dpg.does_item_exist("commandPaletteResults"):

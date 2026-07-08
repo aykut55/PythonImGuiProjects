@@ -6,9 +6,12 @@ from .panel import Panel
 
 
 class PanelManager:
+    COLLAPSED_PANEL_HEIGHT = 30  # collapseAllPanels'in kuculttugu sabit yukseklik (bkz. expandAllPanels)
+
     def __init__(self):
         self._panels = {}
         self._nextId = 0
+        self._panelOrder = []  # GORUNUM sirasi (Panel Order kontrolleriyle degistirilebilir; olusturulma sirasindan bagimsiz, bkz. swapPanelUp/Down/resetPanelOrder)
         self._container = None  # panellerin cizilecegi DPG container tag'i (bkz. setContainer)
         self._drawnPanelIds = set()  # drawPanel ile UI'si kurulmus panel id'leri (bkz. sync)
         self._lastRenderPrint = 0.0  # render() heartbeat print throttle (bkz. render)
@@ -35,11 +38,15 @@ class PanelManager:
         """Bir paneli (createPanel'den gelen ya da dogrudan Panel(...) ile
         kurulmus) panelManager'a kaydeder. Ileride id catismasini onlemek
         icin _nextId'i panel.id'nin onune gecirir. panel._manager'i buraya
-        baglar ki panel.draw()/drawData()/sync()/render() calisabilsin."""
+        baglar ki panel.draw()/drawData()/sync()/render() calisabilsin.
+        _panelOrder'in sonuna eklenir (gorunum sirasi = ekleme sirasi,
+        Panel Order kontrolleriyle sonradan degistirilebilir)."""
         self._panels[panel.id] = panel
         panel._manager = self
         if panel.id >= self._nextId:
             self._nextId = panel.id + 1
+        if panel.id not in self._panelOrder:
+            self._panelOrder.append(panel.id)
         return panel
 
     def getPanel(self, panelId):
@@ -59,13 +66,16 @@ class PanelManager:
         return self._panels.get(key)
 
     def deletePanel(self, panelId):
-        """Bir paneli siler (Ref3'teki gibi panel_{id} child_window/_panel_order
-        YOK - bizde henuz UI/cizim katmani yok, sadece model temizlenir)."""
+        """Bir paneli modelden siler + _panelOrder'dan cikarir (cizili
+        panel_{id} child_window'u varsa sync() bir sonraki cagrisinda
+        yetim UI olarak temizler, bkz. sync())."""
         panel = self._panels.get(panelId)
         if panel is None:
             return
         panel.deleteAllData()
         del self._panels[panelId]
+        if panelId in self._panelOrder:
+            self._panelOrder.remove(panelId)
 
     def removePanel(self, panelId):
         """deletePanel ile ayni (isim tercihi icin ikinci ad)."""
@@ -79,12 +89,56 @@ class PanelManager:
             yield panel
 
     def deleteAllPanels(self):
-        """Henuz cizim/UI katmani yok; sadece modeli temizler (Ref3'teki gibi
-        panel_{id} child_window silme/_panel_order YOK - bizde henuz yok)."""
+        """Modeldeki TUM panelleri (+ _panelOrder'i) temizler. Cizili
+        panel_{id} child_window'lari sync() bir sonraki cagrisinda yetim
+        UI olarak temizlenir."""
         for panel in self._panels.values():
             panel.deleteAllData()
         self._panels.clear()
+        self._panelOrder.clear()
         self._nextId = 0
+
+    # -------------------------------------------------------- panel sirasi
+    def getPanelOrder(self):
+        """Panellerin GUNCEL gorunum sirasini (id listesi) dondurur."""
+        return list(self._panelOrder)
+
+    def swapPanelUp(self, panelId):
+        """panelId'yi gorunum sirasinda bir yukari (bir onceki index'e) tasir."""
+        if panelId not in self._panelOrder:
+            return
+        idx = self._panelOrder.index(panelId)
+        if idx > 0:
+            self._panelOrder[idx], self._panelOrder[idx - 1] = \
+                self._panelOrder[idx - 1], self._panelOrder[idx]
+
+    def swapPanelDown(self, panelId):
+        """panelId'yi gorunum sirasinda bir asagi tasir."""
+        if panelId not in self._panelOrder:
+            return
+        idx = self._panelOrder.index(panelId)
+        if idx < len(self._panelOrder) - 1:
+            self._panelOrder[idx], self._panelOrder[idx + 1] = \
+                self._panelOrder[idx + 1], self._panelOrder[idx]
+
+    def applyPanelOrder(self):
+        """_panelOrder'daki sirayla panel_{id} child_window'larini
+        setContainer ile verilen container icinde yeniden diziyor
+        (dpg.move_item varsayilan olarak container'in EN SONUNA tasir;
+        sirayla tekrarlaninca istenen sira olusur). Container/en az 2
+        panel yoksa no-op."""
+        if not self._container or len(self._panelOrder) < 2:
+            return
+        for panelId in self._panelOrder:
+            tag = f"panel_{panelId}"
+            if dpg.does_item_exist(tag):
+                dpg.move_item(tag, parent=self._container)
+
+    def resetPanelOrder(self):
+        """Gorunum sirasini panellerin OLUSTURULMA (ekleme) sirasina
+        dondurup uygular."""
+        self._panelOrder = list(self._panels.keys())
+        self.applyPanelOrder()
 
     # ----------------------------------------------------------------- cizim
     def setContainer(self, tag):
@@ -449,6 +503,25 @@ class PanelManager:
     def showAllPanels(self):
         for panelId in self._panels:
             self.showPanel(panelId)
+
+    def collapseAllPanels(self):
+        """GORUNUR tum panelleri ince bir baslik seridine kuculttur.
+        panel.height DEGISMEZ (model dokunulmaz) - sadece cizili
+        panel_{id} child_window'unun DPG yuksekligi degisir, bu yuzden
+        expandAllPanels eski haline geri getirebilir."""
+        for panelId, panel in self._panels.items():
+            tag = f"panel_{panelId}"
+            if dpg.does_item_exist(tag) and dpg.is_item_shown(tag):
+                dpg.set_item_height(tag, self.COLLAPSED_PANEL_HEIGHT)
+
+    def expandAllPanels(self):
+        """GORUNUR tum panelleri panel.height'a (height<=0 ise 300'e)
+        geri genisletir (bkz. collapseAllPanels)."""
+        for panelId, panel in self._panels.items():
+            tag = f"panel_{panelId}"
+            if dpg.does_item_exist(tag) and dpg.is_item_shown(tag):
+                h = panel.height if panel.height and panel.height > 0 else 300
+                dpg.set_item_height(tag, h)
 
     # ------------------------------------------------------------- periyodik
     def sync(self):
