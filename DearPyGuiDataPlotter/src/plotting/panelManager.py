@@ -195,7 +195,68 @@ class PanelManager:
                 dpg.add_line_series(d.xs, d.ys, label=d.name,
                                     tag=f"line_{panelId}_{d.id}", parent=yTag)
         self._drawLevels(panelId, panel)
+        self._applyAxisPadding(panelId, panel)
         self.updateXAxisTicks(panelId)
+
+    def _applyAxisPadding(self, panelId, panel,
+                         xMarginRatio=0.02, yMarginRatio=0.08):
+        """Panelin GORUNUR TUM datalarindan x/y eksen limitlerini hesaplayip
+        (min-max araligina bir pay ekleyerek) dpg.set_axis_limits ile
+        uygular - boylece ilk/son bar ya da en yuksek/dusuk deger plot
+        cercevesine YAPISMAZ (panellerin kendi aralarinda birakilan bosluk
+        gibi, verinin de kenarlardan biraz payi olsun istendi). Gorunur
+        data yoksa (hepsi silinmis/gizlenmis) kilit kaldirilir
+        (set_axis_limits_auto) ki eksen eski/bayat bir araliga KILITLI
+        KALMASIN.
+
+        NOT: dpg.set_axis_limits çağrısı DPG'de ekseni pan/zoom'a KAPALI hale
+        getirip o araliga KILITLER (set_axis_limits_auto cagrilana kadar).
+        Sadece bir kerelik "guzel cerceveleme" istedigimiz icin (kilitli
+        kalsin istemiyoruz), limit BIR FRAME uygulanip dpg.split_frame() ile
+        beklenir, sonra set_axis_limits_auto ile kilit hemen kaldirilir -
+        kullanici o andan itibaren serbestce zoom/pan yapabilir. Bir sonraki
+        drawPanelData (veri degisikligi/hide-show/order) cagrisinda görünüm
+        yeniden bu dolgulu hale doner."""
+        xTag = f"x_axis_{panelId}"
+        yTag = f"y_axis_{panelId}"
+        if not dpg.does_item_exist(xTag) or not dpg.does_item_exist(yTag):
+            return
+
+        xMin = xMax = yMin = yMax = None
+        for d in panel.dataList:
+            if not d.isVisible:
+                continue
+            xs = d.xs if d.xs else (list(range(len(d.open))) if d.open else None)
+            if xs:
+                xMin = xs[0] if xMin is None else min(xMin, xs[0])
+                xMax = xs[-1] if xMax is None else max(xMax, xs[-1])
+            if d.dataCount:
+                yMin = d.minY if yMin is None else min(yMin, d.minY)
+                yMax = d.maxY if yMax is None else max(yMax, d.maxY)
+
+        appliedX = False
+        if xMin is None or xMax is None:
+            dpg.set_axis_limits_auto(xTag)
+        else:
+            xPad = max(1.0, (xMax - xMin) * xMarginRatio)
+            dpg.set_axis_limits(xTag, xMin - xPad, xMax + xPad)
+            appliedX = True
+
+        appliedY = False
+        if yMin is None or yMax is None:
+            dpg.set_axis_limits_auto(yTag)
+        else:
+            yRange = yMax - yMin
+            yPad = yRange * yMarginRatio if yRange > 0 else max(1.0, abs(yMax) * yMarginRatio)
+            dpg.set_axis_limits(yTag, yMin - yPad, yMax + yPad)
+            appliedY = True
+
+        if appliedX or appliedY:
+            dpg.split_frame()
+            if appliedX:
+                dpg.set_axis_limits_auto(xTag)
+            if appliedY:
+                dpg.set_axis_limits_auto(yTag)
 
     def _drawLevels(self, panelId, panel):
         """panel.levels'daki yatay/dikey seviye cizgilerini inf_line_series
@@ -503,6 +564,31 @@ class PanelManager:
                           default_value=0.0, color=(255, 255, 0, 160),
                           thickness=1, vertical=False, no_inputs=True,
                           no_fit=True, show=False)
+
+        # DPG'nin yerlesik cift-tikla-fit'i (fit_button, varsayilan sol tik)
+        # TIGHT (payisiz) bir sinira resetliyor - bizim _applyAxisPadding
+        # dolgusunu ezip gecirdigi icin cift tiklamayi yakalayip PADDING'i
+        # geri uyguluyoruz (bkz. _onPlotDoubleClicked).
+        registryTag = f"plot_dclick_registry_{panel.id}"
+        if dpg.does_item_exist(registryTag):
+            dpg.delete_item(registryTag)
+        with dpg.item_handler_registry(tag=registryTag):
+            dpg.add_item_double_clicked_handler(callback=self._onPlotDoubleClicked,
+                                               user_data=panel.id)
+        dpg.bind_item_handler_registry(plotTag, registryTag)
+
+    def _onPlotDoubleClicked(self, sender=None, appData=None, userData=None):
+        """DPG'nin cift-tikla-fit'i (native, tight/payisiz) bu FRAME icinde
+        uygulanir; biz bir frame BEKLEYIP (split_frame) ustune kendi
+        dolgulu (_applyAxisPadding) araligimizi yeniden yaziyoruz - boylece
+        kullanici cift tikladiginda hala "full data + pay" gorunumu alir,
+        cipliak/payisiz fit degil."""
+        panelId = userData
+        panel = self._panels.get(panelId)
+        if panel is None:
+            return
+        dpg.split_frame()
+        self._applyAxisPadding(panelId, panel)
 
     def hidePanel(self, panelId):
         """Paneli gizler (model: panel.visible=False + varsa UI'da show=False)."""
