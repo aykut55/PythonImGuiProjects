@@ -549,4 +549,4 @@ class PanelManager:
         now = time.time()
         if now - self._lastRenderPrint >= 1.0:
             self._lastRenderPrint = now
-            print(f"[PanelManager.render] tick @ {now:.1f}  panels={len(self._panels)}")
+            # print(f"[PanelManager.render] tick @ {now:.1f}  panels={len(self._panels)}")

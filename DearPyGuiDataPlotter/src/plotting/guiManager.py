@@ -10,6 +10,7 @@ from .panelManager import PanelManager
 from .panelManagerWindow import PanelManagerWindow
 from .poolDataManager import PoolDataManager
 from .poolPanel import PoolPanel
+from .rangeSliderBar import RangeSliderBar
 from .scriptPanel import ScriptPanel
 from ..trading.indicatorManager import IndicatorManager
 from ..trading.stockDataReader import StockDataReader, FilterMode
@@ -30,7 +31,7 @@ class GuiManager:
     CONSOLE_HEIGHT = 261
     PANEL_PADDING = (10, 10)
     PANEL_TAGS = ("topPanel", "centerPanel", "bottomPanel")
-    CENTER_TOP_HEIGHT = 150  # RangeSlider/HScrollBar icin ayrilan ust bant
+    CENTER_TOP_HEIGHT = 190  # RangeSlider/HScrollBar icin ayrilan ust bant (scrollbar kirpilmiyordu, artirildi)
 
     def __init__(self, configManager):
         self.configManager = configManager
@@ -65,6 +66,10 @@ class GuiManager:
         # Controls hala placeholder.
         self.panelManagerWindow = PanelManagerWindow()
         self.panelManagerWindow.setPanelManager(self.panelManager)
+        # RangeSliderBar: centerTopPanel'e gomulu, SADECE gorsel iskelet
+        # (bkz. rangeSliderBar.py) - pan/zoom'a baglanmadi.
+        self.rangeSliderBar = RangeSliderBar()
+        self.rangeSliderBar.setPanelManager(self.panelManager)
         self.scriptPanel.set_globals(gm=self, pm=self.panelManager, pool=self.poolDataManager,
                                      Panel=Panel, PanelData=PanelData,
                                      StockDataReader=StockDataReader, FilterMode=FilterMode,
@@ -136,6 +141,7 @@ class GuiManager:
     def render(self):
         """Her frame cagrilan ust-seviye render girisi. Su an alt bilesenlere
         delege ediyor; ileride baska bilesenler eklendikce buraya eklenir."""
+        self.rangeSliderBar.render()
         self.panelManager.render()
         self.leftMenuPanel.render()
         self.panelManagerWindow.render()
@@ -143,6 +149,7 @@ class GuiManager:
     def sync(self):
         """Model<->UI senkronunu manuel tetiklemek icin (render() zaten her
         frame otomatik yapiyor)."""
+        self.rangeSliderBar.sync()
         self.panelManager.sync()
         self.leftMenuPanel.sync()
         self.panelManagerWindow.sync()
@@ -186,6 +193,10 @@ class GuiManager:
             dpg.bind_item_theme(tag, self.panelTheme)
         dpg.bind_item_theme("centerTopPanel", self.panelTheme)
         dpg.bind_item_theme("centerCenterPanel", self.panelTheme)
+        # RangeSliderBar panelTheme'den SONRA cizilip kendi (daha dar) dikey
+        # padding temasini centerTopPanel'e baglar - boylece panelTheme'in
+        # WindowPadding'i tarafindan EZILMEZ (bkz. rangeSliderBar.py).
+        self.rangeSliderBar.build("centerTopPanel")
 
         s = self._panelInitialCoords("scriptPanel")
         self.scriptPanel.build(s["x"], s["y"], s["width"], s["height"],

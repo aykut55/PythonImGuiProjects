@@ -277,12 +277,12 @@ class App:
         # pm.drawPanels()/drawAllPanelData() YOK - tekil eylem, script kendi
         # dongusunu kurar. drawPanel: kabuk (child_window+plot+eksenler).
         # drawPanelData: kabugun icine gercek candle/line serilerini basar.
+        dpg.configure_item("centerTopPanel", show=True)
         for p in pm.iterateAllPanels():
             pm.drawPanel(p.id)
             pm.drawPanelData(p.id)
 
     def run(self):
-        dpg.configure_item("centerTopPanel", show=False)
         pm.setContainer("centerCenterPanel")
 
         # dp'deki reader ONCEKI Run'un kendi readData() cagrisindan kalmissa
@@ -297,6 +297,7 @@ class App:
 
         # Once eskisini SIL ve bunu ekrana BAS (split_frame) - kullanici
         # gercekten "sifirlandigini" hissetsin. Sonra sifirdan kur+ciz.
+        dpg.configure_item("centerTopPanel", show=False)
         pm.deleteAllPanels()
         pm.sync()
         pool.clear()
