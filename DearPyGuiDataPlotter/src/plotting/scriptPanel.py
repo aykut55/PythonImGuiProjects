@@ -88,6 +88,7 @@ class ScriptPanel:
                 dpg.add_button(label="Reopen", callback=self._reopen)
                 dpg.add_button(label="Save", callback=self._save)
                 dpg.add_button(label="Save As", callback=lambda: dpg.show_item(self.SAVEAS_DIALOG))
+                dpg.add_button(label="New", callback=self._new)
                 dpg.add_button(label="Console",
                                callback=lambda: self._on_open_console and self._on_open_console())
                 dpg.add_text("File:")
@@ -133,6 +134,15 @@ class ScriptPanel:
         # Reload the active file from disk (e.g. after editing it externally).
         self._load_path(self._current_path)
         print(f"Yeniden yuklendi: {self._current_path}")
+
+    def _new(self):
+        """Editordeki metni temizler (Clear gibi) - DISKTEKI dosyaya (_current_path)
+        dokunmaz, Save/Save As hala ayni dosyayi hedef alir. Amac: acik/calisan
+        app'e karsi hizlica ad-hoc debug kodu yazip Run'a basabilmek - _run()
+        her zaman AYNI kalici namespace'i (gm/pm/dpg) kullandigi icin buraya
+        yapistirilan kod da halihazirda calisan uygulamaya karsi calisir."""
+        if dpg.does_item_exist(self.CODE):
+            dpg.set_value(self.CODE, "")
 
     def _save(self):
         self._save_to(self._current_path)
