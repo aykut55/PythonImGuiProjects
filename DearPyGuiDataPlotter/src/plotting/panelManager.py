@@ -879,6 +879,14 @@ class PanelManager:
         return self._activeUpdateMode
 
     def getActivePanelId(self):
+        """Henuz hicbir hover/click ile bir panel aktif olmadiysa (_activePanelId
+        hala None) ve en az bir panel varsa, panel siralamasindaki ILK paneli
+        varsayilan olarak dondurur - boylece combo/gosterge "None" yerine
+        bastan itibaren bir panel secili gorunur. _activePanelId'in kendisi
+        DEGISTIRILMEZ (gercek bir hover/click olana kadar hala None) - bu
+        SADECE okurken uygulanan bir fallback."""
+        if self._activePanelId is None and self._panelOrder:
+            return self._panelOrder[0]
         return self._activePanelId
 
     def updateActivePanel(self):

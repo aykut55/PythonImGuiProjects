@@ -222,6 +222,33 @@ class GuiManager:
     def _onCrossHairModeChanged(self, sender=None, appData=None):
         self.panelManager.setCrossHairMode((appData or "all").lower())
 
+    def _onReadSrcParams(self, sender=None, appData=None):
+        pass
+
+    def _onApplySrcParams(self, sender=None, appData=None):
+        pass
+
+    def _onAdjustYAxisSrc(self, sender=None, appData=None):
+        pass
+
+    def _onAdjustYAxisAll(self, sender=None, appData=None):
+        pass
+
+    def _onTopViewApply(self, sender=None, appData=None):
+        pass
+
+    def _onPanToStart(self, sender=None, appData=None):
+        pass
+
+    def _onPanLeft(self, sender=None, appData=None):
+        pass
+
+    def _onPanRight(self, sender=None, appData=None):
+        pass
+
+    def _onPanToEnd(self, sender=None, appData=None):
+        pass
+
     def _saveTopViewModeValues(self, mode):
         fields = self.TOP_VIEW_MODE_FIELDS.get(mode, ())
         if not fields:
@@ -353,7 +380,8 @@ class GuiManager:
                         dpg.add_combo(tag="top_view_mode_combo", items=topViewModes,
                                      default_value=topViewModes[0], width=150,
                                      callback=self._onTopViewModeChanged)
-                        dpg.add_button(label="Apply", width=60)
+                        dpg.add_button(label="Apply", width=60,
+                                       callback=self._onTopViewApply)
                     with dpg.group(horizontal=True, tag="top_view_n_row", pos=(0, 0)):
                         dpg.add_input_int(tag="top_view_n_input", label="N", step=0,
                                          default_value=0, width=70, show=False)
@@ -376,28 +404,36 @@ class GuiManager:
                         dpg.add_input_int(tag="top_pan_step_input", step=0,
                                          default_value=100, width=70, show=False)
                     with dpg.group(horizontal=True):
-                        dpg.add_button(label="|< Basa", width=70)
-                        dpg.add_button(label="<< Sol", width=70)
-                        dpg.add_button(label="Sag >>", width=70)
-                        dpg.add_button(label="Son >|", width=70)
+                        dpg.add_button(label="|< Basa", width=70,
+                                       callback=self._onPanToStart)
+                        dpg.add_button(label="<< Sol", width=70,
+                                       callback=self._onPanLeft)
+                        dpg.add_button(label="Sag >>", width=70,
+                                       callback=self._onPanRight)
+                        dpg.add_button(label="Son >|", width=70,
+                                       callback=self._onPanToEnd)
                         dpg.add_text("", tag="top_pan_position_text")
 
                 with dpg.child_window(tag="topPanelGroupBox3", width=330, height=-1, border=True):
                     # Ref3'teki drawTopPanel() 3. satirinin bir kismi: Read Src
-                    # Params / Apply Params To Other. SADECE GORSEL - ikisi de
-                    # bilerek EVENT YOK (henuz PlotController/eksen okuma-yazma
-                    # katmani yok, bkz. docs/todo.md).
+                    # Params / Apply Params To Other. Callback'ler BAGLANDI ama
+                    # icleri BILEREK BOS (pass) - gercek eksen okuma-yazma
+                    # mantigi henuz yok, sadece buton<->method baglantisi hazir.
                     with dpg.group(horizontal=True):
-                        dpg.add_button(label="Read Params (src)", width=140)
-                        dpg.add_button(label="Apply Params (dst)", width=140)
+                        dpg.add_button(label="Read Params (src)", width=140,
+                                       callback=self._onReadSrcParams)
+                        dpg.add_button(label="Apply Params (dst)", width=140,
+                                       callback=self._onApplySrcParams)
                     # Ref3'teki drawTopPanel() 6. satiri: Adjust Src Y / Adjust
-                    # All Y Axes. SADECE GORSEL - EVENT YOK (ayni sebep: eksen
-                    # okuma-yazma katmani yok). "Adjust All Y" fikri zaten
-                    # PanelManagerWindow'da da placeholder olarak var, tag
-                    # cakismasin diye buradakiler "top_" onekiyle.
+                    # All Y Axes. Callback'ler BAGLANDI ama icleri BILEREK BOS
+                    # (pass) - "Adjust All Y" fikri zaten PanelManagerWindow'da
+                    # da placeholder olarak var, tag cakismasin diye buradakiler
+                    # "top_" onekiyle.
                     with dpg.group(horizontal=True):
-                        dpg.add_button(label="Adjust Y Axis (src)", width=140)
-                        dpg.add_button(label="Adjust Y Axis (all)", width=140)
+                        dpg.add_button(label="Adjust Y Axis (src)", width=140,
+                                       callback=self._onAdjustYAxisSrc)
+                        dpg.add_button(label="Adjust Y Axis (all)", width=140,
+                                       callback=self._onAdjustYAxisAll)
                     dpg.add_text("", tag="top_visible_window_text")
 
                 with dpg.child_window(tag="topPanelGroupBox4", width=300, height=-1, border=True):

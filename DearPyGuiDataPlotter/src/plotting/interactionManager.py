@@ -353,14 +353,25 @@ class InteractionManager:
         return self._getRectRegion(panelInfo)
 
     def _getPanelUnderMouse(self):
-        """Event'in sahibi paneli PanelManager'in ZATEN var olan 'aktif panel'
-        takibinden okur (bkz. setPanelManager/panelManager.getActivePanelId) -
-        burada AYRI bir hit-test/is_item_hovered dongusu KURULMADI. Boylece
-        topPanelGroupBox1'deki 'Active Panel' gostergesiyle AYNI kaynak
-        kullanilir, iki yerde ayni "kim aktif" sorusu COZULMEZ."""
+        """Event'in sahibi panel KIMLIGINI PanelManager'in ZATEN var olan
+        'aktif panel' takibinden okur (bkz. setPanelManager/
+        panelManager.getActivePanelId) - AYRI bir panel-kayit-listesi
+        taranmiyor. AMA panelManager.getActivePanelId() artik (hicbir
+        hover/click olmasa bile) ILK paneli varsayilan dondurebiliyor - bu
+        yuzden SADECE panelId almak yetmez: asagida o panelin GERCEKTEN
+        su an hover'da olup olmadigi da (dpg.is_item_hovered) dogrulanir.
+        Boylece topPanel'deki buton/combo/menu tiklamalari gibi PLOT DISI
+        etkilesimler event olarak yakalanip yanlislikla ilk panele mal
+        edilmez - sadece gercekten bir plotun uzerindeyken event uretilir."""
         if self._panelManager is None:
             return None
         panelId = self._panelManager.getActivePanelId()
         if panelId is None:
             return None
-        return self._panels.get(panelId)
+        panelInfo = self._panels.get(panelId)
+        if panelInfo is None:
+            return None
+        plotId = panelInfo["plotId"]
+        if not (dpg.does_item_exist(plotId) and dpg.is_item_hovered(plotId)):
+            return None
+        return panelInfo
