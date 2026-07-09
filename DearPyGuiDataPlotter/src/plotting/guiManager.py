@@ -100,7 +100,7 @@ class GuiManager:
                                      IndicatorManager=IndicatorManager)
         self._renderLoopStarted = False
         self._topViewModeValues = {}  # {mode: {field: value}} - bkz. seedTopViewRangeInputs/_saveTopViewModeValues
-        self._lastTopViewMode = "FitToScreen (Normal)"  # _onTopViewModeChanged'in "cikilan mod" takibi
+        self._lastTopViewMode = "FitToScreen (Ultra)"  # _onTopViewModeChanged'in "cikilan mod" takibi - combo'nun gorsel varsayilaniyla (topViewModes[2]) AYNI olmali
         self.isDarkTheme = True
         self.lightTheme = self._buildLightTheme()
         self.panelTheme = self._buildPanelTheme()
@@ -173,7 +173,21 @@ class GuiManager:
         self.panelManagerWindow.render()
         self._refreshActivePanelCombo()
         self._alignTopViewNRow()
+        self._syncViewStatusText()
         self.interactionManager.onTick()
+
+    def _syncViewStatusText(self):
+        """Her frame cagrilir - bottom paneldeki status'u aktif panelin O ANKI
+        gorunur X araligina gore gunceller. Onceden SADECE pan/View-Apply
+        butonlarindan sonra yaziliyordu; mouse ile wheel-zoom/box-select
+        yapildiginda X araligi DPG'nin kendi ic mekanizmasiyla degistiginde
+        "Visible Data Count" HABERSIZ kaliyordu (bkz. rangeSliderBar'daki ayni
+        fikir - scroll bar da boyle canliya cevrilmisti)."""
+        panelId = self.panelManager.getActivePanelId()
+        limits = self.panelManager.getXAxisLimits(panelId)
+        if limits is None:
+            return
+        self._updateViewStatusText(panelId, limits)
 
     def sync(self):
         """Model<->UI senkronunu manuel tetiklemek icin (render() zaten her
@@ -248,13 +262,26 @@ class GuiManager:
         self._setStatusText(f"Adjusted Y: {count} panels")
 
     def _onResetViewSrc(self, sender=None, appData=None):
+        # "Reset" artik TAM VERIYE degil, View/Range combosunda O AN secili
+        # moda (varsayilan FitToScreen (Ultra)) resetler - Full Data'ya
+        # zorlamak yerine kullanicinin sectigi View/Range gecerli olur.
         panelId = self.panelManager.getActivePanelId()
-        ok = self.panelManager.resetPanelView(panelId)
-        self._setStatusText(f"Reset View: panel {panelId}" if ok else "Reset View: no active panel")
+        mode = dpg.get_value("top_view_mode_combo")
+        n = dpg.get_value("top_view_n_input")
+        n2 = dpg.get_value("top_view_n2_input")
+        result = self.panelManager.applyViewMode(panelId, mode, n=n, n2=n2)
+        if result is None:
+            self._setStatusText("Reset View: no active panel")
+            return
+        self.rangeSliderBar.syncScrollToView(panelId)
+        self._updateViewStatusText(panelId, result)
 
     def _onResetViewAll(self, sender=None, appData=None):
-        count = self.panelManager.resetAllPanelViews()
-        self._setStatusText(f"Reset View: {count} panels")
+        mode = dpg.get_value("top_view_mode_combo")
+        n = dpg.get_value("top_view_n_input")
+        n2 = dpg.get_value("top_view_n2_input")
+        count = self.panelManager.applyViewModeToAllPanels(mode, n=n, n2=n2)
+        self._setStatusText(f"Reset View: {count} panels ({mode})")
 
     def _onAdjustXAxisAll(self, sender=None, appData=None):
         params = self.panelManager.readPanelPlotParams()
@@ -281,7 +308,21 @@ class GuiManager:
         self._setStatusText(f"Adjust All: pending {pending} panel(s)")
 
     def _onTopViewApply(self, sender=None, appData=None):
-        pass
+        panelId = self.panelManager.getActivePanelId()
+        mode = dpg.get_value("top_view_mode_combo")
+        n = dpg.get_value("top_view_n_input")
+        n2 = dpg.get_value("top_view_n2_input")
+        result = self.panelManager.applyViewMode(panelId, mode, n=n, n2=n2)
+        if result is None:
+            self._setStatusText("View: no active panel/data")
+            return
+        # Kullanicinin son sectigi View/Range modu "standing default" olarak
+        # kaydedilir - yeni veri yuklenen bir panelde otomatik uygulanacak
+        # gorunum artik budur (bkz. panelManager.setDefaultViewMode/
+        # _maybeApplyDefaultViewOnLoad).
+        self.panelManager.setDefaultViewMode(mode, n, n2)
+        self.rangeSliderBar.syncScrollToView(panelId)
+        self._updateViewStatusText(panelId, result)
 
     def _onPanToStart(self, sender=None, appData=None):
         self._doPan("start")
@@ -312,10 +353,20 @@ class GuiManager:
         # Scroll bar'i da yeni gorunur araliga gore guncelle (Ref1'deki
         # _update_pan_indicator ile ayni fikir).
         self.rangeSliderBar.syncScrollToView(panelId)
+        self._updateViewStatusText(panelId, result)
+
+    def _updateViewStatusText(self, panelId, xLimits):
+        """Bottom paneldeki status label'i "Full Data Count : N, ViewRange :
+        [xxxx - yyyyy], Visible Data Count : N" formatinda gunceller - hem
+        pan (_doPan) hem View/Range Apply (_onTopViewApply) sonrasi cagrilir."""
+        xMin, xMax = xLimits
         barCount = self.panelManager.getPanelDataCount(panelId)
         offset = max(0, round(xMin))
         end = min(barCount, round(xMax)) if barCount > 0 else round(xMax)
-        self._setStatusText(f"[{offset} - {end}] / {barCount}")
+        visibleCount = max(0, end - offset)
+        self._setStatusText(
+            f"{barCount} / [{offset} - {end}] / "
+            f"{visibleCount}")
 
     def _setStatusText(self, text):
         if dpg.does_item_exist("bottom_status_text"):
@@ -450,7 +501,7 @@ class GuiManager:
                                        "FitToScreen (Ultra)", "Full Data", "Last N Data",
                                        "First N Data", "Range"]
                         dpg.add_combo(tag="top_view_mode_combo", items=topViewModes,
-                                     default_value=topViewModes[0], width=150,
+                                     default_value=topViewModes[2], width=150,
                                      callback=self._onTopViewModeChanged)
                         dpg.add_button(label="Apply", width=60,
                                        callback=self._onTopViewApply)
@@ -520,10 +571,14 @@ class GuiManager:
                 with dpg.child_window(tag="topPanelGroupBox4", width=300, height=-1, border=True):
                     # RangeSliderBar'in (centerTopPanel'e gomulu) iki bagimsiz
                     # gorunurluk bayragini (bkz. rangeSliderBar.py setSliderVisible/
-                    # setScrollbarVisible) buradan yonetir. Ikisi de default CHECKED.
+                    # setScrollbarVisible) buradan yonetir. SliderRange default
+                    # UNCHECKED, ScrollBar default CHECKED - RangeSliderBar.__init__
+                    # 'deki _sliderVisible/_scrollbarVisible baslangic degerleri
+                    # buradaki default_value'larla EL ILE senkron tutulmali (DPG
+                    # default_value callback'i tetiklemiyor).
                     with dpg.group(horizontal=True):
                         dpg.add_checkbox(label="Show SliderRange", tag="top_show_sliderange_checkbox",
-                                         default_value=True, callback=self._onShowSliderRangeChanged)
+                                         default_value=False, callback=self._onShowSliderRangeChanged)
                         dpg.add_text("CrossHair :")
                         dpg.add_combo(tag="top_crosshair_mode_combo", items=["Hidden", "Single", "All"],
                                      default_value="All", width=70,

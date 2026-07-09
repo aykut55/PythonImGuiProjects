@@ -43,6 +43,10 @@ class PanelManager:
         self._activePanelId = None  # su an "aktif" sayilan panelin id'si (bkz. updateActivePanel/_onPlotClicked)
         self._interactionManager = None  # bkz. setInteractionManager (guiManager tarafindan baglanir)
         self._lastReadPlotParams = None  # Read Params (src) ile yakalanan son kaynak plot/eksen durumu
+        self._defaultViewMode = "FitToScreen (Ultra)"  # guiManager'daki "top_view_mode_combo"nun gorsel varsayilaniyla AYNI olmali
+        self._defaultViewN = 1000
+        self._defaultViewN2 = 2000
+        self._lastDrawnDataCount = {}  # {panelId: onceki drawPanelData'daki dataCount} - bkz. _maybeApplyDefaultViewOnLoad
 
     def setInteractionManager(self, interactionManager):
         self._interactionManager = interactionManager
@@ -98,6 +102,7 @@ class PanelManager:
             self._panelOrder.remove(panelId)
         if self._interactionManager is not None:
             self._interactionManager.unregisterPanel(panelId)
+        self._lastDrawnDataCount.pop(panelId, None)
 
     def removePanel(self, panelId):
         """deletePanel ile ayni (isim tercihi icin ikinci ad)."""
@@ -122,6 +127,12 @@ class PanelManager:
         self._panels.clear()
         self._panelOrder.clear()
         self._nextId = 0
+        # _nextId sifirlandigi icin bir sonraki run AYNI panelId'leri yeniden
+        # kullanacak - bu dict temizlenmezse eski (sifir olmayan) dataCount
+        # gorulup _maybeApplyDefaultViewOnLoad "fresh load" degil sanip
+        # varsayilan View/Range modunu (FitToScreen) UYGULAMIYORDU, script
+        # ikinci kez calistirilinca plot Full Data ile aciliyordu.
+        self._lastDrawnDataCount.clear()
 
     # -------------------------------------------------------- panel sirasi
     def getPanelOrder(self):
@@ -218,6 +229,7 @@ class PanelManager:
         self._drawLevels(panelId, panel)
         self._applyAxisPadding(panelId, panel)
         self.updateXAxisTicks(panelId)
+        self._maybeApplyDefaultViewOnLoad(panelId)
 
     def _applyAxisPadding(self, panelId, panel,
                          xMarginRatio=0.02, yMarginRatio=0.08):
@@ -462,6 +474,121 @@ class PanelManager:
         xTag = f"x_axis_{panelId}"
         if dpg.does_item_exist(xTag):
             dpg.set_axis_limits_auto(xTag)
+
+    # ------------------------------------------------------- view/range
+    def applyViewMode(self, panelId=None, mode="FitToScreen (Ultra)", n=1000, n2=2000):
+        """guiManager'daki "View / Range" Apply butonunun gercek mantigi
+        (Ref1'deki apply_view_mode ile ayni fikir). mode:
+          - 'FitToScreen (Normal/Wide/Ultra)': plot'un piksel genisligine ve
+            sabit bir bar-genisligine (Ultra en ince/en genis-araligi-gosteren)
+            gore kac bar sigacagini hesaplayip verinin SONUNU gosterir.
+          - 'Full Data': tum veri.
+          - 'Last N Data' / 'First N Data': son/ilk n bar.
+          - 'Range': n=baslangic bar index'i, n2=gorunur bar sayisi.
+        Basarili olursa (xMin, xMax) doner (Y ekseni de adjustYAxis ile
+        hemen fit'lenir), veri/panel yoksa None."""
+        panelId = self.getActivePanelId() if panelId is None else panelId
+        panel = self._panels.get(panelId)
+        xTag = f"x_axis_{panelId}"
+        if panel is None or not dpg.does_item_exist(xTag):
+            return None
+        barCount = self.getPanelDataCount(panelId)
+        if barCount <= 0:
+            return None
+        dataRange = self._fullXRangeForPanel(panel)
+        if dataRange is None:
+            return None
+        dataMin, dataMax = dataRange
+
+        if mode.startswith("FitToScreen"):
+            if "Wide" in mode:
+                barWidth = 2.5
+            elif "Ultra" in mode:
+                barWidth = 1.5
+            else:
+                barWidth = 4.0
+            plotWidth = self._plotPixelWidth(panelId)
+            visible = int(plotWidth / barWidth) if barWidth > 0 else barCount
+            visible = max(100, min(visible, barCount))
+            offset = max(0, barCount - visible)
+        elif mode == "Full Data":
+            offset = 0
+            visible = barCount
+        elif mode == "Last N Data":
+            visible = max(1, min(int(n), barCount))
+            offset = max(0, barCount - visible)
+        elif mode == "First N Data":
+            visible = max(1, min(int(n), barCount))
+            offset = 0
+        elif mode == "Range":
+            offset = max(0, min(int(n), barCount - 1))
+            visible = max(1, min(int(n2), barCount - offset))
+        else:
+            return None
+
+        span = max(1, visible)
+        pad = max(1.0, span * 0.015)
+        xMin = dataMin + offset - pad
+        xMax = dataMin + offset + visible - 1 + pad
+
+        dpg.set_axis_limits(xTag, xMin, xMax)
+        dpg.split_frame()
+        dpg.set_axis_limits_auto(xTag)
+        self.adjustYAxis(panelId, xLimits=(xMin, xMax))
+        return xMin, xMax
+
+    def applyViewModeToAllPanels(self, mode="FitToScreen (Ultra)", n=1000, n2=2000):
+        """Tum GORUNUR panellere applyViewMode uygular ("Reset All" butonu -
+        adjustAllYAxes ile ayni desen). Donen deger: basarili uygulanan panel
+        sayisi."""
+        count = 0
+        for panel in self._panels.values():
+            if not panel.getVisible():
+                continue
+            if self.applyViewMode(panel.id, mode, n=n, n2=n2) is not None:
+                count += 1
+        return count
+
+    def _plotPixelWidth(self, panelId):
+        """FitToScreen hesabi icin plot'un ekrandaki piksel genisligi. Plot
+        henuz cizilmemis/olculemiyorsa makul bir varsayilana (800) duser."""
+        plotTag = f"plot_{panelId}"
+        if dpg.does_item_exist(plotTag):
+            try:
+                w = dpg.get_item_rect_size(plotTag)[0]
+                if w > 0:
+                    return float(w)
+            except Exception:
+                pass
+        return 800.0
+
+    def setDefaultViewMode(self, mode, n=1000, n2=2000):
+        """guiManager'daki View/Range Apply butonu basarili oldugunda cagirilir -
+        kullanicinin SON sectigi mod/N/N2'yi 'standing default' olarak hafizaya
+        alir. Bu default, YENI veri yuklenen bir panelde (bkz.
+        _maybeApplyDefaultViewOnLoad) otomatik uygulanir - boylece "Load Data"
+        sonrasi panel her zaman TUM veriyi degil, kullanicinin son sectigi
+        View/Range gorunumunu (baslangicta FitToScreen (Ultra)) gosterir."""
+        self._defaultViewMode = mode
+        self._defaultViewN = n
+        self._defaultViewN2 = n2
+
+    def _maybeApplyDefaultViewOnLoad(self, panelId):
+        """drawPanelData HER veri degisiminde (add/hide/show/reorder) cagrilir,
+        ama biz SADECE panel bos->dolu (fresh veri yuklemesi) gecisinde
+        'standing default' View/Range modunu (bkz. setDefaultViewMode)
+        uygulamak istiyoruz - _applyAxisPadding'in HER cagirildiginda uyguladigi
+        'tum veri + pay' gorunumunu ilk yuklemede GOSTERMEK ISTEMIYORUZ. Hide/
+        show/reorder gibi diger tetikleyicilerde kullanicinin mevcut pan/zoom
+        konumu KORUNUR - burasi bir daha tetiklenmez (dataCount zaten >0'dan
+        >0'a gectigi icin 'fresh load' sayilmaz)."""
+        count = self.getPanelDataCount(panelId)
+        hadData = self._lastDrawnDataCount.get(panelId, 0) > 0
+        self._lastDrawnDataCount[panelId] = count
+        if hadData or count <= 0:
+            return
+        self.applyViewMode(panelId, self._defaultViewMode,
+                          n=self._defaultViewN, n2=self._defaultViewN2)
 
     def _panStepDelta(self, mode, step, span):
         if mode == "VisibleScreenWidth":
