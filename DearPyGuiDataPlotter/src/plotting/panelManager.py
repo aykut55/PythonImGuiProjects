@@ -1,3 +1,4 @@
+import math
 import time
 
 import dearpygui.dearpygui as dpg
@@ -36,6 +37,7 @@ class PanelManager:
         self._activeUpdateMode = "hover"  # hover | click - "aktif panel" hangi etkilesimle degisecek (bkz. setActiveUpdateMode)
         self._activePanelId = None  # su an "aktif" sayilan panelin id'si (bkz. updateActivePanel/_onPlotClicked)
         self._interactionManager = None  # bkz. setInteractionManager (guiManager tarafindan baglanir)
+        self._lastReadPlotParams = None  # Read Params (src) ile yakalanan son kaynak plot/eksen durumu
 
     def setInteractionManager(self, interactionManager):
         self._interactionManager = interactionManager
@@ -298,6 +300,223 @@ class PanelManager:
                             dpg.add_theme_style(dpg.mvPlotStyleVar_LineWeight,
                                                 float(lvl["thickness"]), category=dpg.mvThemeCat_Plots)
                 dpg.bind_item_theme(series, themeTag)
+
+    # ---------------------------------------------------------- y adjust
+    def adjustYAxis(self, panelId=None, yMarginRatio=0.08, xLimits=None):
+        """Verilen panelin mevcut gorunur X araligindaki visible datalarina gore
+        Y eksen limitini gunceller. X eksenine dokunmaz."""
+        panelId = self.getActivePanelId() if panelId is None else panelId
+        panel = self._panels.get(panelId)
+        yTag = f"y_axis_{panelId}"
+        if panel is None or not dpg.does_item_exist(yTag):
+            return False
+
+        yRange = self._visibleYRangeForPanel(panelId, xLimits=xLimits)
+        if yRange is None:
+            dpg.fit_axis_data(yTag)
+            return True
+
+        yMin, yMax = yRange
+        ySpan = yMax - yMin
+        yPad = ySpan * yMarginRatio if ySpan > 0 else max(1.0, abs(yMax) * yMarginRatio)
+        dpg.set_axis_limits(yTag, yMin - yPad, yMax + yPad)
+        dpg.split_frame()
+        dpg.set_axis_limits_auto(yTag)
+        return True
+
+    def adjustAllYAxes(self, yMarginRatio=0.08):
+        """Tum gorunur panellerde adjustYAxis uygular. Donen deger: basarili
+        adjust edilen panel sayisi."""
+        count = 0
+        for panel in self._panels.values():
+            if not panel.getVisible():
+                continue
+            if self.adjustYAxis(panel.id, yMarginRatio=yMarginRatio):
+                count += 1
+        return count
+
+    def resetPanelView(self, panelId=None, xMarginRatio=0.02, yMarginRatio=0.08):
+        """Paneli native fit davranisiyla full-data gorunumune resetler."""
+        panelId = self.getActivePanelId() if panelId is None else panelId
+        panel = self._panels.get(panelId)
+        xTag = f"x_axis_{panelId}"
+        yTag = f"y_axis_{panelId}"
+        if panel is None or not dpg.does_item_exist(xTag) or not dpg.does_item_exist(yTag):
+            return False
+
+        dpg.fit_axis_data(xTag)
+        dpg.fit_axis_data(yTag)
+        return True
+
+    def resetAllPanelViews(self, xMarginRatio=0.02, yMarginRatio=0.08):
+        """Tum gorunur panelleri full-data gorunumune resetler."""
+        count = 0
+        for panel in self._panels.values():
+            if not panel.getVisible():
+                continue
+            if self.resetPanelView(panel.id, xMarginRatio=xMarginRatio,
+                                   yMarginRatio=yMarginRatio):
+                count += 1
+        return count
+
+    def readPanelPlotParams(self, panelId=None, plotId=None):
+        """Aktif/kaynak panelin plot eksen parametrelerini okur ve hafizada tutar."""
+        panelId = self.getActivePanelId() if panelId is None else panelId
+        panel = self._panels.get(panelId)
+        plotTag = plotId or f"plot_{panelId}"
+        xTag = f"x_axis_{panelId}"
+        yTag = f"y_axis_{panelId}"
+        if panel is None or not dpg.does_item_exist(plotTag):
+            return None
+
+        params = {
+            "panelId": panelId,
+            "plotId": plotTag,
+            "xAxis": xTag,
+            "yAxis": yTag,
+            "xAxisLimits": self._axisLimits(xTag),
+            "yAxisLimits": self._axisLimits(yTag),
+            "frame": dpg.get_frame_count(),
+        }
+        self._lastReadPlotParams = params
+        return params
+
+    def getLastReadPlotParams(self):
+        return self._lastReadPlotParams
+
+    def isPanelReadyForSourceParams(self, panelId):
+        """Panel GUI tarafinda cizilip gorunur hale geldiyse True doner."""
+        panel = self._panels.get(panelId)
+        plotTag = f"plot_{panelId}"
+        xTag = f"x_axis_{panelId}"
+        yTag = f"y_axis_{panelId}"
+        if panel is None or not panel.getVisible():
+            return False
+        if not (dpg.does_item_exist(plotTag)
+                and dpg.does_item_exist(xTag)
+                and dpg.does_item_exist(yTag)):
+            return False
+        try:
+            return dpg.is_item_visible(plotTag)
+        except (KeyError, SystemError, Exception):
+            return False
+
+    def applySourceParamsToPanel(self, panelId, params=None, yMarginRatio=0.08):
+        """Kaynak plot parametrelerini hedef panele uygular.
+
+        X araligi kaynakla aynilanir; Y ise hedef panelin o X araliginda
+        gorunen kendi datalarina gore yeniden fit edilir.
+        """
+        params = params or self._lastReadPlotParams
+        panel = self._panels.get(panelId)
+        if panel is None or params is None:
+            return False
+        if panelId == params.get("panelId"):
+            return True
+        if not self.isPanelReadyForSourceParams(panelId):
+            return False
+
+        xLimits = params.get("xAxisLimits")
+        xTag = f"x_axis_{panelId}"
+        appliedX = False
+        if xLimits is not None:
+            dpg.set_axis_limits(xTag, xLimits[0], xLimits[1])
+            appliedX = True
+        self.adjustYAxis(panelId, yMarginRatio=yMarginRatio, xLimits=xLimits)
+        if appliedX:
+            dpg.split_frame()
+            dpg.set_axis_limits_auto(xTag)
+        return True
+
+    def applySourceXAxisToPanel(self, panelId, params=None):
+        """Kaynak plot'un X araligini hedef panele uygular; Y eksenine dokunmaz."""
+        params = params or self._lastReadPlotParams
+        panel = self._panels.get(panelId)
+        if panel is None or params is None:
+            return False
+        if panelId == params.get("panelId"):
+            return True
+        if not self.isPanelReadyForSourceParams(panelId):
+            return False
+
+        xLimits = params.get("xAxisLimits")
+        if xLimits is None:
+            return False
+
+        xTag = f"x_axis_{panelId}"
+        dpg.set_axis_limits(xTag, xLimits[0], xLimits[1])
+        dpg.split_frame()
+        dpg.set_axis_limits_auto(xTag)
+        return True
+
+    def _visibleYRangeForPanel(self, panelId, xLimits=None):
+        panel = self._panels.get(panelId)
+        xLimits = xLimits or self._axisLimits(f"x_axis_{panelId}")
+        if panel is None or xLimits is None:
+            return None
+        xMin, xMax = xLimits
+        yMin = yMax = None
+        for data in panel.dataList:
+            if not data.isVisible:
+                continue
+            dataRange = self._visibleYRangeForData(data, xMin, xMax)
+            if dataRange is None:
+                continue
+            lo, hi = dataRange
+            yMin = lo if yMin is None else min(yMin, lo)
+            yMax = hi if yMax is None else max(yMax, hi)
+        if yMin is None or yMax is None:
+            return None
+        return yMin, yMax
+
+    def _visibleYRangeForData(self, data, xMin, xMax):
+        xs = data._fullXs if data._fullXs is not None else data.xs
+        if data.dataType == "candle" and data.low and data.high:
+            lows = data._fullLow if data._fullLow is not None else data.low
+            highs = data._fullHigh if data._fullHigh is not None else data.high
+            if len(xs) == 0:
+                xs = range(len(lows))
+        elif data.dataType in ("bar", "volume") and data.volume:
+            highs = data._fullVolume if data._fullVolume is not None else data.volume
+            lows = [0.0] * len(highs)
+            if len(xs) == 0:
+                xs = range(len(highs))
+        else:
+            values = data._fullYs if data._fullYs is not None else data.ys
+            lows = highs = values
+            if len(xs) == 0:
+                xs = range(len(values))
+
+        yMin = yMax = None
+        for i in range(min(len(xs), len(lows), len(highs))):
+            x = xs[i]
+            if x < xMin or x > xMax:
+                continue
+            lo, hi = lows[i], highs[i]
+            if not self._isFiniteNumber(lo) or not self._isFiniteNumber(hi):
+                continue
+            yMin = lo if yMin is None else min(yMin, lo)
+            yMax = hi if yMax is None else max(yMax, hi)
+        if yMin is None or yMax is None:
+            return None
+        return yMin, yMax
+
+    def _axisLimits(self, axis):
+        if not dpg.does_item_exist(axis):
+            return None
+        try:
+            limits = dpg.get_axis_limits(axis)
+        except (KeyError, SystemError, Exception):
+            return None
+        if limits is None or len(limits) < 2:
+            return None
+        return float(limits[0]), float(limits[1])
+
+    def _isFiniteNumber(self, value):
+        try:
+            return math.isfinite(float(value))
+        except (TypeError, ValueError):
+            return False
 
     # ---------------------------------------------------------- x ekseni
     def setXAxisMode(self, mode, dateTimeFormat=None):

@@ -224,16 +224,53 @@ class GuiManager:
         self.panelManager.setCrossHairMode((appData or "all").lower())
 
     def _onReadSrcParams(self, sender=None, appData=None):
-        pass
+        params = self.panelManager.readPanelPlotParams()
+        if not params:
+            self._setStatusText("Read Params: no active panel")
+            return
+        self._setStatusText(
+            f"Read Params: panel {params['panelId']} x={params['xAxisLimits']} y={params['yAxisLimits']}")
 
     def _onApplySrcParams(self, sender=None, appData=None):
-        pass
+        if not self.panelManager.getLastReadPlotParams():
+            self._setStatusText("Apply Params: read source params first")
+            return
+        pending = self.interactionManager.scheduleSyncOthers()
+        self._setStatusText(f"Apply Params: pending {pending} panel(s)")
 
     def _onAdjustYAxisSrc(self, sender=None, appData=None):
-        pass
+        panelId = self.panelManager.getActivePanelId()
+        ok = self.panelManager.adjustYAxis(panelId)
+        self._setStatusText(f"Adjusted Y: panel {panelId}" if ok else "Adjusted Y: no active panel")
 
     def _onAdjustYAxisAll(self, sender=None, appData=None):
-        pass
+        count = self.panelManager.adjustAllYAxes()
+        self._setStatusText(f"Adjusted Y: {count} panels")
+
+    def _onResetViewSrc(self, sender=None, appData=None):
+        panelId = self.panelManager.getActivePanelId()
+        ok = self.panelManager.resetPanelView(panelId)
+        self._setStatusText(f"Reset View: panel {panelId}" if ok else "Reset View: no active panel")
+
+    def _onResetViewAll(self, sender=None, appData=None):
+        count = self.panelManager.resetAllPanelViews()
+        self._setStatusText(f"Reset View: {count} panels")
+
+    def _onAdjustXAxisAll(self, sender=None, appData=None):
+        params = self.panelManager.readPanelPlotParams()
+        if not params or not params.get("xAxisLimits"):
+            self._setStatusText("Adjust X: no active source X")
+            return
+        pending = self.interactionManager.scheduleSyncOthers(params, mode="x")
+        self._setStatusText(f"Adjust X: pending {pending} panel(s)")
+
+    def _onAdjustAllAxes(self, sender=None, appData=None):
+        params = self.panelManager.readPanelPlotParams()
+        if not params or not params.get("xAxisLimits"):
+            self._setStatusText("Adjust All: no active source X")
+            return
+        pending = self.interactionManager.scheduleSyncOthers(params)
+        self._setStatusText(f"Adjust All: pending {pending} panel(s)")
 
     def _onTopViewApply(self, sender=None, appData=None):
         pass
@@ -249,6 +286,10 @@ class GuiManager:
 
     def _onPanToEnd(self, sender=None, appData=None):
         pass
+
+    def _setStatusText(self, text):
+        if dpg.does_item_exist("bottom_status_text"):
+            dpg.set_value("bottom_status_text", text)
 
     def _saveTopViewModeValues(self, mode):
         fields = self.TOP_VIEW_MODE_FIELDS.get(mode, ())
@@ -435,6 +476,16 @@ class GuiManager:
                                        callback=self._onAdjustYAxisSrc)
                         dpg.add_button(label="Adjust Y Axis (all)", width=140,
                                        callback=self._onAdjustYAxisAll)
+                    with dpg.group(horizontal=True):
+                        dpg.add_button(label="Reset Src", width=140,
+                                       callback=self._onResetViewSrc)
+                        dpg.add_button(label="Adjust X Axes All", width=140,
+                                       callback=self._onAdjustXAxisAll)
+                    with dpg.group(horizontal=True):
+                        dpg.add_button(label="Reset All", width=140,
+                                       callback=self._onResetViewAll)
+                        dpg.add_button(label="Adjust All", width=140,
+                                       callback=self._onAdjustAllAxes)
                     dpg.add_text("", tag="top_visible_window_text")
 
                 with dpg.child_window(tag="topPanelGroupBox4", width=300, height=-1, border=True):
@@ -470,7 +521,7 @@ class GuiManager:
 
         with dpg.child_window(tag="bottomPanel", parent=self.LAYOUT_ROOT,
                               no_scrollbar=True, **geometry["bottomPanel"]):
-            dpg.add_text("Bottom Panel")
+            dpg.add_text("", tag="bottom_status_text")
 
         for tag in self.PANEL_TAGS:
             dpg.bind_item_theme(tag, self.panelTheme)

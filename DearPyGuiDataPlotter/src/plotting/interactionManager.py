@@ -41,6 +41,10 @@ class InteractionManager:
         self._middlePanPanelId = None
         self._eventSequence = 0  # her _emit/_emitKeyEvent'te 1 artan, event'leri siraya koymak icin
         self._eventLog = []  # emit() ANINDA basilmayan, kuyruklanan event'ler (bkz. onTick/flushEventLog)
+        self._syncParams = None  # Read Params (src) ile yakalanan son kaynak plot parametreleri
+        self._syncMode = "params"
+        self._syncVersion = 0
+        self._pendingSyncTargets = {}  # panelId -> syncVersion; gorunur olunca uygulanir
         self.PRINT_FORMATTED = False  # True -> satir-sutun tablo, False -> tek satir (bkz. _printEvent)
 
     def setPrintFormatted(self, formatted):
@@ -66,6 +70,7 @@ class InteractionManager:
     def unregisterPanel(self, panelId):
         """Bir panel silindiginde cagrilir."""
         self._panels.pop(panelId, None)
+        self._pendingSyncTargets.pop(panelId, None)
 
     def getLastEvent(self):
         return self._lastEvent
@@ -109,11 +114,55 @@ class InteractionManager:
             dpg.add_key_release_handler(callback=self._onKeyRelease)
 
     def onTick(self):
-        """Her frame (merkezi render dongusunden) cagrilir. Su an SADECE
-        kuyruklanan event log'unu basiyor (bkz. flushEventLog) - ileride
-        _lastEvent'i (src) yakalayip bagli diger kontrollere uygulama
-        kurgusu da BURAYA eklenecek."""
+        """Her frame (merkezi render dongusunden) cagrilir."""
+        self.syncOthers()
         self.flushEventLog()
+
+    def scheduleSyncOthers(self, params=None, mode="params"):
+        """Kaynak plot parametrelerini diger panellere uygulamak icin kuyruga alir.
+
+        O anda GUI'de gorunur olmayan hedefler pending kalir; syncOthers()
+        her frame tekrar deneyip gorunur olduklari anda uygular.
+        """
+        if self._panelManager is None:
+            return 0
+        params = params or self._panelManager.getLastReadPlotParams()
+        if not params:
+            return 0
+
+        sourcePanelId = params.get("panelId")
+        self._syncVersion += 1
+        self._syncParams = dict(params)
+        self._syncMode = mode
+        self._pendingSyncTargets.clear()
+        for panel in self._panelManager.iterateAllPanels():
+            if panel.id == sourcePanelId or not panel.getVisible():
+                continue
+            self._pendingSyncTargets[panel.id] = self._syncVersion
+        self.syncOthers()
+        return len(self._pendingSyncTargets)
+
+    def syncOthers(self):
+        """Pending hedeflere son kaynak parametrelerini uygular."""
+        if self._panelManager is None or not self._syncParams or not self._pendingSyncTargets:
+            return
+        for panelId, version in list(self._pendingSyncTargets.items()):
+            panel = self._panelManager.getPanel(panelId)
+            if panel is None or version != self._syncVersion:
+                self._pendingSyncTargets.pop(panelId, None)
+                continue
+            if not self._panelManager.isPanelReadyForSourceParams(panelId):
+                continue
+            if self._applyPendingSyncToPanel(panelId):
+                self._pendingSyncTargets.pop(panelId, None)
+
+    def getPendingSyncCount(self):
+        return len(self._pendingSyncTargets)
+
+    def _applyPendingSyncToPanel(self, panelId):
+        if self._syncMode == "x":
+            return self._panelManager.applySourceXAxisToPanel(panelId, self._syncParams)
+        return self._panelManager.applySourceParamsToPanel(panelId, self._syncParams)
 
     def flushEventLog(self):
         """_eventLog'da BIRIKEN (emit aninda basilmayan) event'leri simdi
