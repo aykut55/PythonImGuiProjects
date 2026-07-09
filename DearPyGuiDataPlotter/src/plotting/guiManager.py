@@ -197,6 +197,18 @@ class GuiManager:
         BAGLANMADI - gercekten pan/kaydirma yapmiyor."""
         dpg.configure_item("top_pan_step_input", show=(appData == "UserDefined"))
 
+    def _onShowSliderRangeChanged(self, sender=None, appData=None):
+        self.rangeSliderBar.setSliderVisible(bool(appData))
+
+    def _onShowScrollBarChanged(self, sender=None, appData=None):
+        self.rangeSliderBar.setScrollbarVisible(bool(appData))
+
+    def _onShowInfoPanelChanged(self, sender=None, appData=None):
+        self.panelManager.setInfoPanelMode("always" if appData else "hidden")
+
+    def _onCrossHairModeChanged(self, sender=None, appData=None):
+        self.panelManager.setCrossHairMode((appData or "all").lower())
+
     def _saveTopViewModeValues(self, mode):
         fields = self.TOP_VIEW_MODE_FIELDS.get(mode, ())
         if not fields:
@@ -374,9 +386,29 @@ class GuiManager:
                         dpg.add_button(label="Adjust Y Axis (src)", width=140)
                         dpg.add_button(label="Adjust Y Axis (all)", width=140)
                     dpg.add_text("", tag="top_visible_window_text")
+
+                with dpg.child_window(tag="topPanelGroupBox4", width=300, height=-1, border=True):
+                    # RangeSliderBar'in (centerTopPanel'e gomulu) iki bagimsiz
+                    # gorunurluk bayragini (bkz. rangeSliderBar.py setSliderVisible/
+                    # setScrollbarVisible) buradan yonetir. Ikisi de default CHECKED.
+                    with dpg.group(horizontal=True):
+                        dpg.add_checkbox(label="Show SliderRange", tag="top_show_sliderange_checkbox",
+                                         default_value=True, callback=self._onShowSliderRangeChanged)
+                        dpg.add_text("CrossHair :")
+                        dpg.add_combo(tag="top_crosshair_mode_combo", items=["Hidden", "Single", "All"],
+                                     default_value="All", width=70,
+                                     callback=self._onCrossHairModeChanged)
+                    dpg.add_checkbox(label="Show ScrollBar", tag="top_show_scrollbar_checkbox",
+                                     default_value=True, callback=self._onShowScrollBarChanged)
+                    # panelManager.setInfoPanelMode ile ayni fikir: checked ->
+                    # "always" (tum panellerde sabit gosterilir), unchecked ->
+                    # "hidden" (hicbir panelde gosterilmez).
+                    dpg.add_checkbox(label="Show InfoPanel(s)", tag="top_show_infopanel_checkbox",
+                                     default_value=True, callback=self._onShowInfoPanelChanged)
         dpg.bind_item_theme("topPanelGroupBox1", self._buildCompactControlTheme())
         dpg.bind_item_theme("topPanelGroupBox2", self._buildCompactControlTheme())
         dpg.bind_item_theme("topPanelGroupBox3", self._buildCompactControlTheme())
+        dpg.bind_item_theme("topPanelGroupBox4", self._buildCompactControlTheme())
 
         with dpg.child_window(tag="centerPanel", parent=self.LAYOUT_ROOT,
                               **geometry["centerPanel"]):

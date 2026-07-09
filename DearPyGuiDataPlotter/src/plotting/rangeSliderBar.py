@@ -39,6 +39,9 @@ class RangeSliderBar:
     SPACING_THEME_TAG = "range_slider_bar_spacing_theme"
     PADDING_THEME_TAG = "range_slider_bar_padding_theme"
 
+    CONTAINER_VPADDING = 4  # _applyContainerPaddingTheme'deki (10,2) dikey padding'in TOPLAMI (ust+alt)
+    BOTTOM_GAP = 10          # centerTopPanel'in alt kenari ile gorunur icerigin arasinda birakilan sabit pay
+
     def __init__(self):
         self._panelManager = None  # bkz. setPanelManager (guiManager tarafindan baglanir)
         self._sliderVisible = True     # Range Slider (label+overview plot) gorunur mu
@@ -172,11 +175,32 @@ class RangeSliderBar:
         hicbiri gorunmuyorsa (ya da hic panel yoksa) gizlenir. scripts/
         default.py'de zaten kullanilan `dpg.configure_item("centerTopPanel",
         show=...)` cagrisinin AYNISI - ayri bir "degisti mi" onbellegi
-        YOK, dogrudan her cagrida uygulanir."""
+        YOK, dogrudan her cagrida uygulanir.
+
+        Buna EK: Range Slider ve Scroll Bar'in IKISI BIRDEN gizliyse
+        (_sliderVisible ve _scrollbarVisible ikisi de False) gosterilecek
+        hicbir icerik kalmadigi icin centerTopPanel'in TAMAMI da gizlenir -
+        panel(ler) gorunur olsa bile."""
         if dpg.does_item_exist(self.CONTAINER_TAG):
-            dpg.configure_item(self.CONTAINER_TAG, show=self._anyPanelVisible())
+            show = self._anyPanelVisible() and (self._sliderVisible or self._scrollbarVisible)
+            dpg.configure_item(self.CONTAINER_TAG, show=show)
+
+    def _syncContainerHeight(self):
+        """centerTopPanel'in yuksekligini GERCEKTEN gorunen icerige (grup
+        icindeki hangi ogeler show=True ise onlarin toplam rect'i) gore
+        ayarlar - sabit/tahmini piksel degerleri YOK, dogrudan CONTENT_GROUP_TAG'in
+        olculen yuksekligi + BOTTOM_GAP kullanilir. Boylece Range Slider/
+        Scroll Bar'dan hangisi gorunuyorsa centerTopPanel'in alt kenari
+        onun bir tik altinda kalir."""
+        if not (dpg.does_item_exist(self.CONTAINER_TAG) and dpg.does_item_exist(self.CONTENT_GROUP_TAG)):
+            return
+        contentHeight = dpg.get_item_rect_size(self.CONTENT_GROUP_TAG)[1]
+        dpg.configure_item(self.CONTAINER_TAG,
+                          height=int(contentHeight + self.CONTAINER_VPADDING + self.BOTTOM_GAP))
 
     def render(self):
-        """GuiManager.render() tarafindan her frame cagrilir. sync()'e
-        delege ediyor (bkz. sync())."""
+        """GuiManager.render() tarafindan her frame cagrilir. sync()'e ve
+        _syncContainerHeight()'e delege ediyor - ikisi de her frame calisir
+        (bkz. sync()/_syncContainerHeight())."""
         self.sync()
+        self._syncContainerHeight()
