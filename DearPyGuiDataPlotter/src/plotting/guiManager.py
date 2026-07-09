@@ -63,6 +63,7 @@ class GuiManager:
         self.consolePanel = ConsolePanel()
         self.consolePanel.attachStdout()
         self.scriptPanel.set_on_open_console(self.consolePanel.show)
+        self.scriptPanel.set_on_run_complete(self.sync)
         self.panelManager = PanelManager()
         self.leftMenuPanel.setPanelManager(self.panelManager)
         # InteractionManager: panel/plot olusturulup PanelManager'a eklendiginde
