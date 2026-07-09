@@ -6,12 +6,12 @@ class RangeSliderBar:
     Start/End drag-line marker'lari + secili aralik golgesi) + yatay Scroll
     Bar iskeleti.
 
-    Ref3'teki range_controller.py'den (RangeController) SADECE GORSEL
-    bilesenler alindi: "Range Slider" etiketi + overview plot + marker'lar +
-    shade + scroll slider. Mouse handler'lari, gercek plot pan/zoom'a baglanti
-    (visible_range_changed_callback), pan/scroll hesaplari, seri/veri baglama
-    BILINCLI OLARAK tasinmadi - "bagla" degil sadece "iskelet" istendi. Butun
-    widget'lar sabit/dummy degerlerle cizilir, hicbir callback yoktur.
+    Ref3'teki range_controller.py'den (RangeController) baslangicta SADECE
+    GORSEL bilesenler alinmisti. Scroll Bar artik aktif panelin X eksenine
+    IKI YONLU baglandi (bkz. syncScrollToView/_onScrollDragged): plot pan/
+    zoom/box-select edilince scroll bar canli takip eder, scroll bar
+    suruklenince de plot pan eder. Overview plot + Start/End marker + shade
+    ise HALA sadece gorsel/dummy - onlara henuz bir baglanti yapilmadi.
 
     Gorunurluk IKI KATMANLI:
       1) centerTopPanel'in tamami: panelManager'da EN AZ BIR GORUNUR panel
@@ -41,11 +41,14 @@ class RangeSliderBar:
 
     CONTAINER_VPADDING = 4  # _applyContainerPaddingTheme'deki (10,2) dikey padding'in TOPLAMI (ust+alt)
     BOTTOM_GAP = 10          # centerTopPanel'in alt kenari ile gorunur icerigin arasinda birakilan sabit pay
+    DRAG_Y_ADJUST_STRIDE = 4  # scroll bar suruklenirken kac tik'te bir Y ekseni adjust edilecek (her tik degil - split_frame maliyeti)
 
     def __init__(self):
         self._panelManager = None  # bkz. setPanelManager (guiManager tarafindan baglanir)
         self._sliderVisible = True     # Range Slider (label+overview plot) gorunur mu
         self._scrollbarVisible = True  # Scroll Bar gorunur mu
+        self._scrollDragActive = False  # bir onceki frame'de scroll bar suruklenirken miydi (bkz. _syncScrollToActivePanel)
+        self._scrollDragTickCount = 0  # drag suresince kac _onScrollDragged tetiklendi (bkz. DRAG_Y_ADJUST_STRIDE)
 
     def setPanelManager(self, panelManager):
         self._panelManager = panelManager
@@ -93,7 +96,7 @@ class RangeSliderBar:
             dpg.add_spacer(height=6)
             dpg.add_slider_int(tag=self.SCROLL_TAG, width=-1, height=14,
                                min_value=0, max_value=100, default_value=100,
-                               no_input=True)
+                               no_input=True, callback=self._onScrollDragged)
 
         self._applySpacingTheme()
         self._applyContainerPaddingTheme(parentTag)
@@ -184,6 +187,96 @@ class RangeSliderBar:
         if dpg.does_item_exist(self.CONTAINER_TAG):
             show = self._anyPanelVisible() and (self._sliderVisible or self._scrollbarVisible)
             dpg.configure_item(self.CONTAINER_TAG, show=show)
+        self._syncScrollToActivePanel()
+
+    def _syncScrollToActivePanel(self):
+        """Her frame cagrilir - scroll bar'i aktif panelin O ANKI gorunur X
+        araligina gore gunceller. Onceden SADECE pan butonlarindan (guiManager.
+        _doPan -> syncScrollToView) tetikleniyordu; mouse ile suruklenerek
+        pan yapildiginda veya box-select/wheel-zoom ile X eksen araligi
+        DPG'nin kendi ic mekanizmasiyla degistiginde scroll bar HABERSIZ
+        kaliyordu. Artik her frame canli okunuyor, TEK istisna: kullanici
+        scroll bar'i O AN suruklerken (dpg.is_item_active) burasi calismaz -
+        yoksa bir onceki frame'in eski konumu, kullanicinin az once surukledigi
+        degeri her frame geri ezerdi.
+
+        Drag BITTIGI (bir onceki frame active, bu frame degil) frame'de: drag
+        sirasinda panToFraction(liveOnly=True) tarafindan KILITLI birakilan x
+        eksenini unlockXAxis() ile serbest birakir ve Y eksenini SON KEZ adjust
+        eder - HER TIK'te degil, ayrica _onScrollDragged icinde DRAG_Y_ADJUST_STRIDE
+        tik'te bir de ARA adjust yapiliyor (surukleme suresince Y'nin de gozle
+        gorulur sekilde takip etmesi icin, ama her tik'te degil - split_frame
+        maliyeti "dalga dalga" kekemelige yol aciyordu)."""
+        if self._panelManager is None or not dpg.does_item_exist(self.SCROLL_TAG):
+            return
+        active = dpg.is_item_active(self.SCROLL_TAG)
+        if self._scrollDragActive and not active:
+            panelId = self._panelManager.getActivePanelId()
+            self._panelManager.unlockXAxis(panelId)
+            self._panelManager.adjustYAxis(panelId)
+            self._scrollDragTickCount = 0
+        self._scrollDragActive = active
+        if active:
+            return
+        self.syncScrollToView()
+
+    def syncScrollToView(self, panelId=None):
+        """Scroll bar'in degerini panelin GORUNUR X penceresinin TOPLAM veri
+        icindeki ORANINA gore gunceller (Ref1'deki _update_pan_indicator ile
+        ayni fikir: offset degisince gosterge de degisir). Her frame
+        (_syncScrollToActivePanel) VE pan butonlarindan (guiManager._doPan)
+        sonra cagrilir.
+
+        SADECE xMax'i (sag kenari) izlemek YANLISTI: Basa'ya basinca xMax =
+        dataMin + span oluyordu, span (gorunur genislik) toplam veriye gore
+        kucuk degilse bu deger 0'a YAKIN OLMUYOR, scroll bar en basa gitmis
+        gibi gorunmuyordu. Bunun yerine pencerenin sol kenarinin (xMin), veri
+        kaydirilabilecek TOPLAM mesafe (total - span) icindeki oranini
+        (fraction) hesaplayip 0..count araligina olcekliyoruz:
+          - Basa: xMin == dataMin -> fraction 0 -> scroll en solda.
+          - Sona: xMin == dataMax - span -> fraction 1 -> scroll en sagda.
+          - Tum veri gorunuyorsa (span >= total, kaydiracak yer YOK) -> en
+            sagda kalir (full-data yuklemede istenen varsayilan konum)."""
+        if self._panelManager is None or not dpg.does_item_exist(self.SCROLL_TAG):
+            return
+        panelId = self._panelManager.getActivePanelId() if panelId is None else panelId
+        count = self._panelManager.getPanelDataCount(panelId)
+        limits = self._panelManager.getXAxisLimits(panelId)
+        dataRange = self._panelManager.getFullXRange(panelId)
+        if count <= 0 or limits is None or dataRange is None:
+            return
+        xMin, xMax = limits
+        dataMin, dataMax = dataRange
+        total = dataMax - dataMin
+        span = xMax - xMin
+        denom = total - span
+        fraction = 1.0 if denom <= 0 else max(0.0, min(1.0, (xMin - dataMin) / denom))
+        dpg.configure_item(self.SCROLL_TAG, max_value=count)
+        dpg.set_value(self.SCROLL_TAG, fraction * count)
+
+    def _onScrollDragged(self, sender=None, appData=None):
+        """Kullanici scroll bar'i mouse ile suruklediginde (SANIYEDE ONLARCA
+        KEZ) cagrilir - syncScrollToView'in TERSI: plot'un GORUNUR X penceresini
+        (mevcut genisligi koruyarak) scroll bar'in yeni konumuna gore pan eder
+        (bkz. panelManager.panToFraction). liveOnly=True: her tikte split_frame/
+        set_axis_limits_auto YAPILMAZ (pahali - "dalga dalga" kekemelige yol
+        aciyordu), sadece eksen anlik kaydirilir.
+
+        Y ekseni HER tik'te degil, DRAG_Y_ADJUST_STRIDE tik'te BIR ARA adjust
+        edilir - hem surukleme akici kalsin hem de kullanici Y'nin de takip
+        ettigini gorsun diye orta yol (drag bitince zaten SON bir adjust daha
+        yapiliyor, bkz. _syncScrollToActivePanel)."""
+        if self._panelManager is None:
+            return
+        panelId = self._panelManager.getActivePanelId()
+        count = self._panelManager.getPanelDataCount(panelId)
+        if count <= 0:
+            return
+        fraction = appData / count
+        self._panelManager.panToFraction(panelId, fraction, liveOnly=True)
+        self._scrollDragTickCount += 1
+        if self._scrollDragTickCount % self.DRAG_Y_ADJUST_STRIDE == 0:
+            self._panelManager.adjustYAxis(panelId)
 
     def _syncContainerHeight(self):
         """centerTopPanel'in yuksekligini GERCEKTEN gorunen icerige (grup

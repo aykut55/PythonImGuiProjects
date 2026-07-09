@@ -265,7 +265,15 @@ class GuiManager:
         self._setStatusText(f"Adjust X: pending {pending} panel(s)")
 
     def _onAdjustAllAxes(self, sender=None, appData=None):
-        params = self.panelManager.readPanelPlotParams()
+        # scheduleSyncOthers SADECE "diger" panellere uygular (src'ye dokunmaz -
+        # zaten kendi parametrelerinde oldugu icin). Ama src'nin Y ekseni
+        # kendi GUNCEL gorunur X araligina gore hic adjust edilmemis olabilir
+        # (orn. pan sonrasi) - bu yuzden params okumadan ONCE src'nin Y'sini
+        # adjust ediyoruz ki hem src'nin kendisi hem diger panellere yayilan
+        # deger GUNCEL/dogru olsun.
+        panelId = self.panelManager.getActivePanelId()
+        self.panelManager.adjustYAxis(panelId)
+        params = self.panelManager.readPanelPlotParams(panelId)
         if not params or not params.get("xAxisLimits"):
             self._setStatusText("Adjust All: no active source X")
             return
@@ -276,16 +284,40 @@ class GuiManager:
         pass
 
     def _onPanToStart(self, sender=None, appData=None):
-        pass
+        self._doPan("start")
 
     def _onPanLeft(self, sender=None, appData=None):
-        pass
+        self._doPan("left")
 
     def _onPanRight(self, sender=None, appData=None):
-        pass
+        self._doPan("right")
 
     def _onPanToEnd(self, sender=None, appData=None):
-        pass
+        self._doPan("end")
+
+    def _doPan(self, direction):
+        panelId = self.panelManager.getActivePanelId()
+        mode = dpg.get_value("top_pan_mode_combo")
+        step = dpg.get_value("top_pan_step_input")
+        result = self.panelManager.panPanel(panelId, direction=direction, mode=mode, step=step)
+        if result is None:
+            dpg.set_value("top_pan_position_text", "no active panel")
+            self._setStatusText("Pan: no active panel")
+            return
+        xMin, xMax = result
+        # Ref1'deki pan_view AYNI: HER pan yonunde (sadece Basa/Sona degil,
+        # Sol/Sag'da da) gorunur X araligi degistigi icin Y ekseni de src
+        # panele gore hemen adjust edilir (Adjust Y Axis (src) ile ayni
+        # cagri) - kullanici ayrica butona basmak zorunda kalmasin.
+        self.panelManager.adjustYAxis(panelId)
+        # Scroll bar'i da yeni gorunur araliga gore guncelle (Ref1'deki
+        # _update_pan_indicator ile ayni fikir).
+        self.rangeSliderBar.syncScrollToView(panelId)
+        dpg.set_value("top_pan_position_text", f"x=[{xMin:.0f}, {xMax:.0f}]")
+        barCount = self.panelManager.getPanelDataCount(panelId)
+        offset = max(0, round(xMin))
+        end = min(barCount, round(xMax)) if barCount > 0 else round(xMax)
+        self._setStatusText(f"[{offset} - {end}] / {barCount}")
 
     def _setStatusText(self, text):
         if dpg.does_item_exist("bottom_status_text"):

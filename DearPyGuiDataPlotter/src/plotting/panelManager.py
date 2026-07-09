@@ -34,7 +34,12 @@ class PanelManager:
         self._crossHairMode = "all"  # hidden | single | all - varsayilan "all": infoPanel gibi TUM panellerde surekli (bkz. setCrossHairMode)
         self._crossHairPersist = True  # varsayilan True: mouse plot'tan cikinca crosshair SON pozisyonda kalir, gizlenmez - infoPanel'in "always" modu gibi surekli gorunur (bkz. setCrossHairPersist)
         self._crossHairLastPos = None  # (kaynakPanelId, x, y) - persist ve "all" modunun paylastigi son bilinen konum
-        self._activeUpdateMode = "hover"  # hover | click - "aktif panel" hangi etkilesimle degisecek (bkz. setActiveUpdateMode)
+        self._activeUpdateMode = "click"  # hover | click - "aktif panel" hangi etkilesimle degisecek (bkz. setActiveUpdateMode).
+        # GUI'deki "active_update_mode_combo"nun default_value'su "Click" - DPG
+        # default_value verilince callback'i TETIKLEMEDIGI icin buradaki
+        # baslangic degeri combo'nun gorsel varsayilaniyla EL ILE ayni tutulmali,
+        # yoksa kullanici hicbir sey degistirmeden Click gorunurken model hala
+        # "hover" kalip mouse gezintisiyle aktif panel degismeye devam ediyordu.
         self._activePanelId = None  # su an "aktif" sayilan panelin id'si (bkz. updateActivePanel/_onPlotClicked)
         self._interactionManager = None  # bkz. setInteractionManager (guiManager tarafindan baglanir)
         self._lastReadPlotParams = None  # Read Params (src) ile yakalanan son kaynak plot/eksen durumu
@@ -359,6 +364,128 @@ class PanelManager:
                                    yMarginRatio=yMarginRatio):
                 count += 1
         return count
+
+    # ---------------------------------------------------------- pan
+    def panPanel(self, panelId=None, direction="left", mode="VisibleScreenWidth", step=100):
+        """Verilen/aktif panelin X eksenini kaydirir. direction: 'start'|'left'|
+        'right'|'end'. mode: 'VisibleScreenWidth' (o an gorunen genislik kadar
+        kaydir) | '1 Bar'/'10 Bar'/'100 Bar'/'1000 Bar' (sabit bar adedi) |
+        'UserDefined' (step parametresi kadar). 'start'/'end' mevcut gorunur
+        genisligi koruyarak GORUNUR verinin en basina/sonuna atlar. Basarili
+        olursa (yeniXMin, yeniXMax) doner, aksi halde None."""
+        panelId = self.getActivePanelId() if panelId is None else panelId
+        panel = self._panels.get(panelId)
+        xTag = f"x_axis_{panelId}"
+        if panel is None or not dpg.does_item_exist(xTag):
+            return None
+
+        limits = self._axisLimits(xTag)
+        if limits is None:
+            return None
+        xMin, xMax = limits
+        span = xMax - xMin
+
+        if direction in ("start", "end"):
+            dataRange = self._fullXRangeForPanel(panel)
+            if dataRange is None:
+                return None
+            dataMin, dataMax = dataRange
+            if direction == "start":
+                newMin, newMax = dataMin, dataMin + span
+            else:
+                newMin, newMax = dataMax - span, dataMax
+        else:
+            delta = self._panStepDelta(mode, step, span)
+            if direction == "left":
+                newMin, newMax = xMin - delta, xMax - delta
+            else:  # "right"
+                newMin, newMax = xMin + delta, xMax + delta
+            # Limit kontrolu: verinin disina tasarsa (start/end'in aksine sol/sag
+            # hicbir sinira gore hesaplanmiyordu) genisligi koruyarak en yakin
+            # sinira yaslar - yoksa bos bir bolgeye kayip Y ekseni (adjustYAxis)
+            # gorunur veri bulamadigi icin fit_axis_data'ya duserdi.
+            dataRange = self._fullXRangeForPanel(panel)
+            if dataRange is not None:
+                dataMin, dataMax = dataRange
+                if newMin < dataMin:
+                    newMin, newMax = dataMin, dataMin + span
+                elif newMax > dataMax:
+                    newMin, newMax = dataMax - span, dataMax
+
+        dpg.set_axis_limits(xTag, newMin, newMax)
+        dpg.split_frame()
+        dpg.set_axis_limits_auto(xTag)
+        return newMin, newMax
+
+    def panToFraction(self, panelId=None, fraction=0.0, liveOnly=False):
+        """RangeSliderBar'in scroll bar'i suruklenince cagrilir - syncScrollToView'in
+        TERSI: GORUNUR genisligi (span) koruyarak penceresini 0..1 arasindaki
+        fraction'a gore TOPLAM veri araliginda konumlandirir (0=en bas, 1=en son).
+        Basarili olursa (yeniXMin, yeniXMax) doner, aksi halde None.
+
+        liveOnly=True: SADECE dpg.set_axis_limits cagrilir, split_frame/
+        set_axis_limits_auto ATLANIR - scroll bar suruklenirken (saniyede onlarca
+        kez tetiklenen) her tikte split_frame() (bir render frame'ini SENKRON
+        bekliyor) cagirmak "dalga dalga" bir kekemelige yol aciyordu. Drag
+        bitince RangeSliderBar bir kere unlockXAxis() cagirip kilidi kaldirir
+        (bkz. rangeSliderBar._syncScrollToActivePanel)."""
+        panelId = self.getActivePanelId() if panelId is None else panelId
+        panel = self._panels.get(panelId)
+        xTag = f"x_axis_{panelId}"
+        if panel is None or not dpg.does_item_exist(xTag):
+            return None
+
+        limits = self._axisLimits(xTag)
+        dataRange = self._fullXRangeForPanel(panel)
+        if limits is None or dataRange is None:
+            return None
+        xMin, xMax = limits
+        dataMin, dataMax = dataRange
+        span = xMax - xMin
+        total = dataMax - dataMin
+        denom = max(total - span, 0.0)
+        fraction = max(0.0, min(1.0, fraction))
+        newMin = dataMin + fraction * denom
+        newMax = newMin + span
+
+        dpg.set_axis_limits(xTag, newMin, newMax)
+        if not liveOnly:
+            dpg.split_frame()
+            dpg.set_axis_limits_auto(xTag)
+        return newMin, newMax
+
+    def unlockXAxis(self, panelId=None):
+        """panToFraction(liveOnly=True) ile drag sirasinda KILITLI birakilan
+        x eksenini serbest birakir (bkz. rangeSliderBar._syncScrollToActivePanel -
+        scroll bar suruklemesi bitince bir kere cagrilir)."""
+        panelId = self.getActivePanelId() if panelId is None else panelId
+        xTag = f"x_axis_{panelId}"
+        if dpg.does_item_exist(xTag):
+            dpg.set_axis_limits_auto(xTag)
+
+    def _panStepDelta(self, mode, step, span):
+        if mode == "VisibleScreenWidth":
+            return span
+        if mode == "UserDefined":
+            return step
+        # "1 Bar" / "10 Bar" / "100 Bar" / "1000 Bar"
+        try:
+            return float(mode.split()[0])
+        except (ValueError, IndexError):
+            return span
+
+    def _fullXRangeForPanel(self, panel):
+        xMin = xMax = None
+        for d in panel.dataList:
+            if not d.isVisible:
+                continue
+            xs = d.xs if d.xs else (list(range(len(d.open))) if d.open else None)
+            if xs:
+                xMin = xs[0] if xMin is None else min(xMin, xs[0])
+                xMax = xs[-1] if xMax is None else max(xMax, xs[-1])
+        if xMin is None or xMax is None:
+            return None
+        return xMin, xMax
 
     def readPanelPlotParams(self, panelId=None, plotId=None):
         """Aktif/kaynak panelin plot eksen parametrelerini okur ve hafizada tutar."""
@@ -1108,6 +1235,38 @@ class PanelManager:
         if self._activePanelId is None and self._panelOrder:
             return self._panelOrder[0]
         return self._activePanelId
+
+    def getFullXRange(self, panelId=None):
+        """Verilen/aktif panelin GORUNUR serilerindeki toplam (dataMin, dataMax)
+        araligini dondurur (RangeSliderBar'in scroll bar konumunu orantilamak
+        icin, bkz. rangeSliderBar.syncScrollToView). Veri yoksa None."""
+        panelId = self.getActivePanelId() if panelId is None else panelId
+        panel = self._panels.get(panelId)
+        if panel is None:
+            return None
+        return self._fullXRangeForPanel(panel)
+
+    def getXAxisLimits(self, panelId=None):
+        """Verilen/aktif panelin x eksenindeki GUNCEL (zoom/pan sonrasi) limitlerini
+        dondurur - readPanelPlotParams'in aksine _lastReadPlotParams'a YAZMAZ (Read/
+        Apply Params akisini bozmayan yan-etkisiz bir okuma)."""
+        panelId = self.getActivePanelId() if panelId is None else panelId
+        return self._axisLimits(f"x_axis_{panelId}")
+
+    def getPanelDataCount(self, panelId=None):
+        """Verilen/aktif panelin GORUNUR serilerindeki EN BUYUK dataCount'u
+        dondurur (RangeSliderBar scroll bar'ini bu sayiya gore olceklendirir).
+        Panel yok/veri yoksa 0."""
+        panelId = self.getActivePanelId() if panelId is None else panelId
+        panel = self._panels.get(panelId)
+        if panel is None:
+            return 0
+        count = 0
+        for d in panel.dataList:
+            if not d.isVisible:
+                continue
+            count = max(count, d.dataCount)
+        return count
 
     def updateActivePanel(self):
         """render() tarafindan her frame cagrilir. Sadece 'hover' modunda is
