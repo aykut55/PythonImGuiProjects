@@ -301,7 +301,6 @@ class GuiManager:
         step = dpg.get_value("top_pan_step_input")
         result = self.panelManager.panPanel(panelId, direction=direction, mode=mode, step=step)
         if result is None:
-            dpg.set_value("top_pan_position_text", "no active panel")
             self._setStatusText("Pan: no active panel")
             return
         xMin, xMax = result
@@ -313,7 +312,6 @@ class GuiManager:
         # Scroll bar'i da yeni gorunur araliga gore guncelle (Ref1'deki
         # _update_pan_indicator ile ayni fikir).
         self.rangeSliderBar.syncScrollToView(panelId)
-        dpg.set_value("top_pan_position_text", f"x=[{xMin:.0f}, {xMax:.0f}]")
         barCount = self.panelManager.getPanelDataCount(panelId)
         offset = max(0, round(xMin))
         end = min(barCount, round(xMax)) if barCount > 0 else round(xMax)
@@ -486,7 +484,6 @@ class GuiManager:
                                        callback=self._onPanRight)
                         dpg.add_button(label="Son >|", width=70,
                                        callback=self._onPanToEnd)
-                        dpg.add_text("", tag="top_pan_position_text")
 
                 with dpg.child_window(tag="topPanelGroupBox3", width=330, height=-1, border=True):
                     # Ref3'teki drawTopPanel() 3. satirinin bir kismi: Read Src

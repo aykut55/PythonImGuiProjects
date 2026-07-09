@@ -326,10 +326,10 @@ class App:
         # bir onceki formatin UZERINE yazar - hepsi ayni anda birakilirsa
         # sonuncusu kazanir, digerlerinin hicbir etkisi olmaz):
         #   pm.setXAxisMode("datetime", "%d.%m.%Y %H:%M:%S")   # tarih + saat, tek satir
-        #   pm.setXAxisMode("datetime")                        # (varsayilan) isIntraday'e gore otomatik, iki satir
+        pm.setXAxisMode("datetime")                        # (varsayilan) isIntraday'e gore otomatik, iki satir
         #   pm.setXAxisMode("datetime", "%H:%M:%S")            # sadece saat
         #   pm.setXAxisMode("datetime", "%d.%m.%Y")            # sadece tarih
-        pm.setXAxisMode("datetime", "auto")                    # isIntraday'e gore: intraday->sadece saat, degilse->sadece tarih
+        #   pm.setXAxisMode("datetime", "auto")                    # isIntraday'e gore: intraday->sadece saat, degilse->sadece tarih
 
         # topPanel'deki View/Range (Last N Data/First N Data/Range) N/N2
         # kutularinin varsayilanlarini bu Run'daki bar sayisina gore
