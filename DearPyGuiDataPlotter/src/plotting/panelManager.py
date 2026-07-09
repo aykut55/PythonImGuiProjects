@@ -35,6 +35,10 @@ class PanelManager:
         self._crossHairLastPos = None  # (kaynakPanelId, x, y) - persist ve "all" modunun paylastigi son bilinen konum
         self._activeUpdateMode = "hover"  # hover | click - "aktif panel" hangi etkilesimle degisecek (bkz. setActiveUpdateMode)
         self._activePanelId = None  # su an "aktif" sayilan panelin id'si (bkz. updateActivePanel/_onPlotClicked)
+        self._interactionManager = None  # bkz. setInteractionManager (guiManager tarafindan baglanir)
+
+    def setInteractionManager(self, interactionManager):
+        self._interactionManager = interactionManager
 
     def createPanel(self, name, caption="", parent="", alignment=None):
         """Otomatik id ile YALNIZCA bir Panel olusturur, DONDURUR - panelManager'a
@@ -85,6 +89,8 @@ class PanelManager:
         del self._panels[panelId]
         if panelId in self._panelOrder:
             self._panelOrder.remove(panelId)
+        if self._interactionManager is not None:
+            self._interactionManager.unregisterPanel(panelId)
 
     def removePanel(self, panelId):
         """deletePanel ile ayni (isim tercihi icin ikinci ad)."""
@@ -103,6 +109,9 @@ class PanelManager:
         UI olarak temizlenir."""
         for panel in self._panels.values():
             panel.deleteAllData()
+        if self._interactionManager is not None:
+            for panelId in self._panels.keys():
+                self._interactionManager.unregisterPanel(panelId)
         self._panels.clear()
         self._panelOrder.clear()
         self._nextId = 0
@@ -169,6 +178,9 @@ class PanelManager:
             return
         self._buildPanelUi(panel)
         self._drawnPanelIds.add(panelId)
+        if self._interactionManager is not None:
+            self._interactionManager.registerPanel(
+                panelId, f"plot_{panelId}", f"x_axis_{panelId}", f"y_axis_{panelId}")
 
     def drawPanelData(self, panelId):
         """Panelin dataList'indeki (candle/bar/line) serilerini + levels

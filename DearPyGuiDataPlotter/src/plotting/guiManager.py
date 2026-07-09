@@ -2,6 +2,7 @@ import dearpygui.dearpygui as dpg
 
 from .consolePanel import ConsolePanel
 from .dataManager import DataManager
+from .interactionManager import InteractionManager
 from .leftMenuPanel import LeftMenuPanel
 from .menuBar import MenuBar
 from .panel import Panel
@@ -64,6 +65,17 @@ class GuiManager:
         self.scriptPanel.set_on_open_console(self.consolePanel.show)
         self.panelManager = PanelManager()
         self.leftMenuPanel.setPanelManager(self.panelManager)
+        # InteractionManager: panel/plot olusturulup PanelManager'a eklendiginde
+        # register, silindiginde unregister olur (bkz. interactionManager.py).
+        # ensureHandlers(): Ref3'teki PlotController ile ayni global mouse
+        # handler'lari (wheel/pan/box-select/click/double-click) - SU AN SADECE
+        # event URETIYOR (konsola yazdirir), diger kontrollere uygulama YOK.
+        self.interactionManager = InteractionManager()
+        self.panelManager.setInteractionManager(self.interactionManager)
+        # Event sahibi (hangi panel) PanelManager'in ZATEN var olan aktif
+        # panel takibinden (getActivePanelId) okunur - bkz. interactionManager.py.
+        self.interactionManager.setPanelManager(self.panelManager)
+        self.interactionManager.ensureHandlers()
         self.poolDataManager = PoolDataManager()
         # PoolPanel: DataManager gibi bagimsiz/floating bir pencere - hicbir
         # slotu isgal etmez, kullanici acip kapatana kadar ekranda kalir.
@@ -160,6 +172,7 @@ class GuiManager:
         self.panelManagerWindow.render()
         self._refreshActivePanelCombo()
         self._alignTopViewNRow()
+        self.interactionManager.onTick()
 
     def sync(self):
         """Model<->UI senkronunu manuel tetiklemek icin (render() zaten her
