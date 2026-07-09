@@ -103,6 +103,8 @@ class PanelManager:
         if self._interactionManager is not None:
             self._interactionManager.unregisterPanel(panelId)
         self._lastDrawnDataCount.pop(panelId, None)
+        if self._activePanelId == panelId:
+            self._activePanelId = None
 
     def removePanel(self, panelId):
         """deletePanel ile ayni (isim tercihi icin ikinci ad)."""
@@ -133,6 +135,13 @@ class PanelManager:
         # varsayilan View/Range modunu (FitToScreen) UYGULAMIYORDU, script
         # ikinci kez calistirilinca plot Full Data ile aciliyordu.
         self._lastDrawnDataCount.clear()
+        # Ayni sebep: _activePanelId de temizlenmezse eski (silinen) panelin
+        # id'si hafizada kalir - script yeni panelleri AYNI id'lerle (_nextId
+        # sifirlandigi icin) yeniden olusturunca getActivePanelId() gercekte
+        # HENUZ hover/click olmamis olsa bile o eski id'yi "aktif" gibi
+        # dondurup Active Panel combosunu YANLIS/ERKEN doldurmaya devam
+        # ediyordu.
+        self._activePanelId = None
 
     # -------------------------------------------------------- panel sirasi
     def getPanelOrder(self):

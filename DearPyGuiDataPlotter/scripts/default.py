@@ -303,6 +303,7 @@ class App:
         pool.clear()
         gm.leftMenuPanel.refresh()
         gm.poolPanel.refresh()
+        gm._refreshActivePanelCombo()  # Active Panel combosu da bu anda "None" gostersin
         dpg.split_frame()
 
         self.buildPanels()
