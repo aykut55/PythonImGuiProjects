@@ -394,7 +394,7 @@ class GuiManager:
                     with dpg.group(horizontal=True):
                         dpg.add_text("Active Panel")
                         dpg.add_combo(tag="active_update_mode_combo", items=["Hover", "Click"],
-                                     default_value="Hover", width=90,
+                                     default_value="Click", width=90,
                                      callback=self._onActiveUpdateModeChanged)
                         # callback YOK: bu combo SADECE gosterge - itemlari/
                         # secili degeri her frame _refreshActivePanelCombo()

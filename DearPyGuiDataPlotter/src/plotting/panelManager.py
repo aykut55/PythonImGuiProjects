@@ -336,7 +336,7 @@ class PanelManager:
         return count
 
     def resetPanelView(self, panelId=None, xMarginRatio=0.02, yMarginRatio=0.08):
-        """Paneli native fit davranisiyla full-data gorunumune resetler."""
+        """Paneli full-data + padding gorunumune resetler."""
         panelId = self.getActivePanelId() if panelId is None else panelId
         panel = self._panels.get(panelId)
         xTag = f"x_axis_{panelId}"
@@ -344,8 +344,9 @@ class PanelManager:
         if panel is None or not dpg.does_item_exist(xTag) or not dpg.does_item_exist(yTag):
             return False
 
-        dpg.fit_axis_data(xTag)
-        dpg.fit_axis_data(yTag)
+        self._applyAxisPadding(panelId, panel,
+                               xMarginRatio=xMarginRatio,
+                               yMarginRatio=yMarginRatio)
         return True
 
     def resetAllPanelViews(self, xMarginRatio=0.02, yMarginRatio=0.08):
@@ -1121,6 +1122,9 @@ class PanelManager:
             if dpg.does_item_exist(plotTag) and dpg.is_item_hovered(plotTag):
                 self._activePanelId = panelId
                 return
+        panelId = self._panelIdUnderMouseByRect()
+        if panelId is not None:
+            self._activePanelId = panelId
 
     def _onPlotClicked(self, sender=None, appData=None, userData=None):
         """_buildPanelUi'da her panelin plot'una baglanan tiklama handler'i.
@@ -1129,6 +1133,25 @@ class PanelManager:
         surekli gunceller)."""
         if self._activeUpdateMode == "click":
             self._activePanelId = userData
+
+    def _panelIdUnderMouseByRect(self):
+        """is_item_hovered kacirdiginda plot rect'i ile aktif paneli bulur."""
+        try:
+            mouseX, mouseY = dpg.get_mouse_pos(local=False)
+        except (KeyError, SystemError, Exception):
+            return None
+        for panelId in reversed(list(self._panels.keys())):
+            plotTag = f"plot_{panelId}"
+            if not dpg.does_item_exist(plotTag):
+                continue
+            try:
+                minX, minY = dpg.get_item_rect_min(plotTag)
+                maxX, maxY = dpg.get_item_rect_max(plotTag)
+            except (KeyError, SystemError, Exception):
+                continue
+            if minX <= mouseX <= maxX and minY <= mouseY <= maxY:
+                return panelId
+        return None
 
     def _currentHoverInfoIndex(self):
         """Mouse'un ustunde oldugu (varsa) ilk plot'u ve o plot'taki bar
