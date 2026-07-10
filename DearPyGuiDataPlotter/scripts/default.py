@@ -1,5 +1,6 @@
-# Hazir: gm, pm, dpg, Panel, PanelData, StockDataReader, FilterMode, IndicatorManager
+# Hazir: gm, pm, tsr, dpg, Panel, PanelData, StockDataReader, FilterMode, IndicatorManager
 
+import math
 import os
 
 # Data secimi:
@@ -50,6 +51,11 @@ PERIODS = [
     ("A",   "Aylik"),
 ]
 
+SHOW_TRADE_SIGNALS = False
+SHOW_TRADE_SIGNAL_LINES = True
+COLOR_BARS_BY_SIGNAL = True
+TRADE_SIGNAL_DRAW_DELAY_FRAMES = 1
+
 
 class App:
     """OHLC + EMA/MACD/RSI/Stochastic panellerini kurup dolduran script uygulamasi.
@@ -82,7 +88,7 @@ class App:
         self.macdHist = []
         self.stochK = []
         self.stochD = []
-        self.signals = []  # al/sat/flat sinyalleri (henuz doldurulmuyor)
+        self.signals = []
         self.level0 = []
         self.level30 = []
         self.level50 = []
@@ -172,7 +178,7 @@ class App:
         self.closes  = [float(v) for v in d.close]
         self.volumes = [float(v) for v in d.volume]
         self.sizes   = [int(v) for v in d.size]
-        self.signals = []  # al/sat/flat sinyalleri (henuz doldurulmuyor)        
+        self.signals = []
 
         im = IndicatorManager(self.xs, self.opens, self.highs, self.lows,
                               self.closes, self.volumes, self.sizes)
@@ -181,6 +187,7 @@ class App:
         self.rsiYs = im.rsi(14)
         self.macdLine, self.macdSignal, self.macdHist = im.macd(12, 26, 9)
         self.stochK, self.stochD = im.stochastic(14, 3)
+        self.signals = self.generateTradeSignalsMa(self.emas[0][2], self.emas[1][2])
 
         # Sabit seviye cizgileri (RSI/Stochastic referanslari icin) - pool'a
         # "Levels" grubunda gidecek (bkz. fillPool).
@@ -189,6 +196,87 @@ class App:
         self.level30 = [30.0] * n
         self.level50 = [50.0] * n
         self.level70 = [70.0] * n
+
+    def generateTradeSignalsRsi(self, rsiYs=None, level30=30.0, level70=70.0, warmup=15):
+        """RSI threshold crossing'lerinden OHLC ile ayni uzunlukta sinyal listesi uretir.
+
+        AL: RSI level70'i asagidan yukari keser.
+        SAT: RSI level30'u yukaridan asagi keser.
+        FLAT: Aktif AL/SAT pozisyonu ters esigi geri kesince kapanir.
+        """
+        values = rsiYs if rsiYs is not None else self.rsiYs
+        signals = [None] * len(values)
+        state = None
+
+        def finite(v):
+            try:
+                return math.isfinite(float(v))
+            except (TypeError, ValueError):
+                return False
+
+        for i in range(max(1, warmup), len(values)):
+            prev = values[i - 1]
+            cur = values[i]
+            if not finite(prev) or not finite(cur):
+                continue
+            prev = float(prev)
+            cur = float(cur)
+
+            if prev < level70 <= cur:
+                signals[i] = "AL"
+                state = "AL"
+            elif state == "AL" and prev > level70 >= cur:
+                signals[i] = "FLAT"
+                state = None
+            elif prev > level30 >= cur:
+                signals[i] = "SAT"
+                state = "SAT"
+            elif state == "SAT" and prev < level30 <= cur:
+                signals[i] = "FLAT"
+                state = None
+
+        return signals
+
+    def generateTradeSignalsMa(self, ema1Ys=None, ema2Ys=None, warmup=1):
+        """Iki EMA serisinin kesismelerinden OHLC ile ayni uzunlukta sinyal listesi uretir.
+
+        AL: ema1, ema2'yi asagidan yukari keser.
+        SAT: ema2, ema1'i asagidan yukari keser. Baska bir ifadeyle ema1,
+        ema2'nin altina iner.
+        FLAT uretilmez.
+        """
+        if ema1Ys is None:
+            ema1Ys = self.emas[0][2] if len(self.emas) >= 1 else []
+        if ema2Ys is None:
+            ema2Ys = self.emas[1][2] if len(self.emas) >= 2 else []
+
+        n = min(len(ema1Ys), len(ema2Ys))
+        signals = [None] * n
+
+        def finite(v):
+            try:
+                return math.isfinite(float(v))
+            except (TypeError, ValueError):
+                return False
+
+        for i in range(max(1, warmup), n):
+            prev1, prev2 = ema1Ys[i - 1], ema2Ys[i - 1]
+            cur1, cur2 = ema1Ys[i], ema2Ys[i]
+            if not (finite(prev1) and finite(prev2) and finite(cur1) and finite(cur2)):
+                continue
+
+            prevDiff = float(prev1) - float(prev2)
+            curDiff = float(cur1) - float(cur2)
+
+            if prevDiff <= 0 < curDiff:
+                signals[i] = "AL"
+            elif prevDiff >= 0 > curDiff:
+                signals[i] = "SAT"
+
+        return signals
+
+    def generateTradeSignalsEma(self, *args, **kwargs):
+        return self.generateTradeSignalsMa(*args, **kwargs)
 
     def fillPanels(self):
         """Hesaplanan veriyi self.*Panel'lere yazar."""
@@ -292,6 +380,33 @@ class App:
         for p in pm.iterateAllPanels():
             pm.drawPanel(p.id)
             pm.drawPanelData(p.id)
+        if self.signals:
+            self.drawTradeSignals()
+
+    def drawTradeSignals(self):
+        if not self.ohlcPanel or not self.signals:
+            return
+        tsr.draw(self.ohlcPanel.id, 0, self.signals,
+                 showSignals=SHOW_TRADE_SIGNALS,
+                 showLevelLines=SHOW_TRADE_SIGNAL_LINES,
+                 colorBars=COLOR_BARS_BY_SIGNAL)
+
+    def scheduleTradeSignals(self, delayFrames=TRADE_SIGNAL_DRAW_DELAY_FRAMES):
+        """Trade signal overlay'ini ana plotlar ekrana geldikten birkac frame
+        sonra cizer. Boylece ilk panel yukleme hissi OHLC/indikator cizimiyle
+        tamamlanir, pahali sinyal overlay'i sonraya kalir."""
+        targetPanelId = self.ohlcPanel.id if self.ohlcPanel else None
+        targetDataLen = len(self.signals)
+
+        def delayedDraw():
+            if targetPanelId is None or pm.getPanel(targetPanelId) is None:
+                return
+            if len(self.signals) != targetDataLen:
+                return
+            self.drawTradeSignals()
+
+        gm.deferFrames(delayedDraw, delayFrames)
+        print(f"TradeSignalRenderer {delayFrames} frame sonra cizilecek.")
 
     def run(self):
         pm.setContainer("centerCenterPanel")

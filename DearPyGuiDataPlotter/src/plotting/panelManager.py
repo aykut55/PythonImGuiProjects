@@ -465,8 +465,10 @@ class PanelManager:
         ySpan = yMax - yMin
         yPad = ySpan * yMarginRatio if ySpan > 0 else max(1.0, abs(yMax) * yMarginRatio)
         dpg.set_axis_limits(yTag, yMin - yPad, yMax + yPad)
-        dpg.split_frame()
-        dpg.set_axis_limits_auto(yTag)
+        if dpg.is_dearpygui_running():
+            dpg.split_frame()
+            if dpg.does_item_exist(yTag):
+                dpg.set_axis_limits_auto(yTag)
         return True
 
     def adjustAllYAxes(self, yMarginRatio=0.08):

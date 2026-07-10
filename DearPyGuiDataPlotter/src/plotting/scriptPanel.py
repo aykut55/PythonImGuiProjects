@@ -23,7 +23,7 @@ class ScriptPanel:
     SAVEAS_DIALOG = "script_saveas_dialog"
 
     FALLBACK_CODE = (
-        "# Hazir: app, gm, pm, dpg, Panel, PanelData\n"
+        "# Hazir: gm, pm, tsr, dpg, Panel, PanelData\n"
     )
 
     def __init__(self):

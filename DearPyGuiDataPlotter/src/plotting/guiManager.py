@@ -15,6 +15,7 @@ from .poolDataManager import PoolDataManager
 from .poolPanel import PoolPanel
 from .rangeSliderBar import RangeSliderBar
 from .scriptPanel import ScriptPanel
+from .tradeSignalRenderer import TradeSignalRenderer
 from ..trading.indicatorManager import IndicatorManager
 from ..trading.stockDataReader import StockDataReader, FilterMode
 
@@ -96,10 +97,13 @@ class GuiManager:
         # (bkz. rangeSliderBar.py) - pan/zoom'a baglanmadi.
         self.rangeSliderBar = RangeSliderBar()
         self.rangeSliderBar.setPanelManager(self.panelManager)
+        self.tradeSignalRenderer = TradeSignalRenderer(self.panelManager)
         self.scriptPanel.set_globals(gm=self, pm=self.panelManager, pool=self.poolDataManager,
                                      Panel=Panel, PanelData=PanelData,
                                      StockDataReader=StockDataReader, FilterMode=FilterMode,
-                                     IndicatorManager=IndicatorManager)
+                                     IndicatorManager=IndicatorManager,
+                                     TradeSignalRenderer=TradeSignalRenderer,
+                                     tsr=self.tradeSignalRenderer)
         self._renderLoopStarted = False
         self._autoSyncXEnabled = True  # bkz. _onAutoSyncXChanged - GUI'deki
         # "top_auto_sync_x_checkbox"un default_value'su ile EL ILE senkron
@@ -113,6 +117,7 @@ class GuiManager:
         self._autoSyncYEnabled = True  # bkz. _onAutoSyncYChanged
         self._lastAutoSyncYTime = 0.0  # throttle icin (bkz. render()) - Auto
         # Sync X ile AYNI sebep/deger (_autoSyncXIntervalSec'i PAYLASIR).
+        self._deferredCallbacks = []  # [{"frames": int, "callback": callable}]
         self._topViewModeValues = {}  # {mode: {field: value}} - bkz. seedTopViewRangeInputs/_saveTopViewModeValues
         self._lastTopViewMode = "FitToScreen (Ultra)"  # _onTopViewModeChanged'in "cikilan mod" takibi - combo'nun gorsel varsayilaniyla (topViewModes[2]) AYNI olmali
         self.isDarkTheme = True
@@ -169,6 +174,9 @@ class GuiManager:
         dpg.set_frame_callback(dpg.get_frame_count() + 1, self._onRenderTick)
 
     def _onRenderTick(self):
+        if not dpg.is_dearpygui_running():
+            self._renderLoopStarted = False
+            return
         # try/except: render() icinde bir hata olursa dongu SESSIZCE durmasin
         # (hatayi konsola yaz, zincire devam et) - normal isleyis bozulmasin.
         try:
@@ -176,11 +184,16 @@ class GuiManager:
         except Exception:
             import traceback
             traceback.print_exc()
-        self._scheduleRenderLoop()
+        if dpg.is_dearpygui_running():
+            self._scheduleRenderLoop()
+        else:
+            self._renderLoopStarted = False
 
     def render(self):
         """Her frame cagrilan ust-seviye render girisi. Su an alt bilesenlere
         delege ediyor; ileride baska bilesenler eklendikce buraya eklenir."""
+        if not dpg.is_dearpygui_running():
+            return
         self.rangeSliderBar.render()
         self.panelManager.render()
         self.leftMenuPanel.render()
@@ -191,7 +204,28 @@ class GuiManager:
         self._syncViewStatusText()
         self._updateAutoSyncX()
         self._updateAutoSyncY()
+        self._runDeferredCallbacks()
         self.interactionManager.onTick()
+
+    def deferFrames(self, callback, frames=1):
+        frames = max(1, int(frames))
+        self._deferredCallbacks.append({"frames": frames, "callback": callback})
+
+    def _runDeferredCallbacks(self):
+        if not self._deferredCallbacks:
+            return
+        pending = []
+        for item in self._deferredCallbacks:
+            item["frames"] -= 1
+            if item["frames"] > 0:
+                pending.append(item)
+                continue
+            try:
+                item["callback"]()
+            except Exception:
+                import traceback
+                traceback.print_exc()
+        self._deferredCallbacks = pending
 
     def _updateAutoSyncX(self):
         """"Auto Sync X" checkbox'i acikken, "Adjust X Axes All" dugmesinin
@@ -307,6 +341,9 @@ class GuiManager:
 
     def _onAutoSyncYChanged(self, sender=None, appData=None):
         self._autoSyncYEnabled = bool(appData)
+
+    def _onShowOhlcChanged(self, sender=None, appData=None):
+        self.tradeSignalRenderer.setActiveOhlcVisible(bool(appData))
 
     def _onReadSrcParams(self, sender=None, appData=None):
         params = self.panelManager.readPanelPlotParams()
@@ -707,6 +744,8 @@ class GuiManager:
                         # oldugu icin tam ALTINDA durur.
                         dpg.add_checkbox(label="Auto Sync Y", tag="top_auto_sync_y_checkbox",
                                          default_value=True, callback=self._onAutoSyncYChanged)
+                    dpg.add_checkbox(label="Show OHLC", tag="top_show_ohlc_checkbox",
+                                     default_value=True, callback=self._onShowOhlcChanged)
         dpg.bind_item_theme("topPanelGroupBox1", self._buildCompactControlTheme())
         dpg.bind_item_theme("topPanelGroupBox2", self._buildCompactControlTheme())
         dpg.bind_item_theme("topPanelGroupBox3", self._buildCompactControlTheme())
