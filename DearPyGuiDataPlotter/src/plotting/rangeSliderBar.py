@@ -3,15 +3,19 @@ import dearpygui.dearpygui as dpg
 
 class RangeSliderBar:
     """guiManager'daki centerTopPanel'e gomulu Range Slider (overview plot +
-    Start/End drag-line marker'lari + secili aralik golgesi) + yatay Scroll
-    Bar iskeleti.
+    surukenebilir secim DORTGENI) + yatay Scroll Bar iskeleti.
 
     Ref3'teki range_controller.py'den (RangeController) baslangicta SADECE
-    GORSEL bilesenler alinmisti. Scroll Bar artik aktif panelin X eksenine
-    IKI YONLU baglandi (bkz. syncScrollToView/_onScrollDragged): plot pan/
-    zoom/box-select edilince scroll bar canli takip eder, scroll bar
-    suruklenince de plot pan eder. Overview plot + Start/End marker + shade
-    ise HALA sadece gorsel/dummy - onlara henuz bir baglanti yapilmadi.
+    GORSEL bilesenler alinmisti. Scroll Bar aktif panelin X eksenine IKI
+    YONLU baglandi (bkz. syncScrollToView/_onScrollDragged): plot pan/zoom/
+    box-select edilince scroll bar canli takip eder, scroll bar suruklenince
+    de plot pan eder (span SABIT kalir). Secim dortgeni de artik AYNI
+    sekilde IKI YONLU baglandi (bkz. syncSliderToView/_onSliderRectDragged) -
+    ImPlot'un native `drag_rect` item'i (bkz. build()) HEM 4 kenardan resize
+    (zoom) HEM de ic kismindan tutup kaydirma (pan) destekliyor, ikisi de
+    TEK bir callback'e dusuyor - hangisinin oldugunu ayirt etmeye gerek yok,
+    surukleme bittiginde dortgenin GUNCEL (xmin,xmax) degeri ne ise aktif
+    panelin X eksenine dogrudan o uygulanir.
 
     Gorunurluk IKI KATMANLI:
       1) centerTopPanel'in tamami: panelManager'da EN AZ BIR GORUNUR panel
@@ -29,15 +33,13 @@ class RangeSliderBar:
     OVERVIEW_PLOT_TAG = "range_overview_plot"
     OVERVIEW_X_AXIS_TAG = "range_overview_x_axis"
     OVERVIEW_Y_AXIS_TAG = "range_overview_y_axis"
-    LEFT_MARKER_TAG = "range_left_line"
-    RIGHT_MARKER_TAG = "range_right_line"
-    SHADE_TAG = "range_selection_shade"
-    SHADE_THEME_TAG = "range_selection_shade_theme"
+    RECT_TAG = "range_selection_rect"
     SCROLL_TAG = "range_scroll"
     RANGE_LABEL_TAG = "range_slider_label"
     CONTENT_GROUP_TAG = "range_slider_bar_group"
     SPACING_THEME_TAG = "range_slider_bar_spacing_theme"
     PADDING_THEME_TAG = "range_slider_bar_padding_theme"
+    SCROLL_THEME_TAG = "range_scroll_theme"
 
     CONTAINER_VPADDING = 4  # _applyContainerPaddingTheme'deki (10,2) dikey padding'in TOPLAMI (ust+alt)
     BOTTOM_GAP = 10          # centerTopPanel'in alt kenari ile gorunur icerigin arasinda birakilan sabit pay
@@ -61,6 +63,16 @@ class RangeSliderBar:
         # degisirse (ornegin drag bitis frame'inde baska bir panele tiklanirsa)
         # yanlis panel unlockXAxis edilir ve gercekten kilitlenen panel x ekseni
         # SONSUZA KADAR manuel/sabit limitte kilitli kalir (zoom/pan'a tepki vermez).
+        self._sliderDragActive = False  # bir onceki frame'de secim dortgeni suruklenirken miydi (bkz. _syncSliderToActivePanel)
+        self._sliderDragTickCount = 0  # drag suresince kac _onSliderRectDragged tetiklendi (bkz. DRAG_Y_ADJUST_STRIDE)
+        self._sliderDragPanelId = None  # scroll bar'daki AYNI kilit-panel eslesmesi sorunu icin (bkz. _scrollDragPanelId) - drag BASLARKEN sabitlenir
+        self._sliderDragEventCount = 0  # _onSliderRectDragged her tetiklendiginde artar (bkz. _syncSliderToActivePanel)
+        self._sliderDragEventSeen = 0   # en son _syncSliderToActivePanel'in gordugu _sliderDragEventCount degeri -
+        # scroll bar'in tersine drag_rect'in dpg.is_item_active DESTEGI GARANTI DEGIL
+        # (plot-ici ozel bir item - standart widget degil), o yuzden "suruklemenin
+        # halen surdugu" bilgisi is_item_active YERINE "bu frame'den beri en az
+        # bir _onSliderRectDragged event'i geldi mi" karsilastirmasiyla tespit
+        # edilir - is_item_active desteklemese bile calisir.
 
     def setPanelManager(self, panelManager):
         self._panelManager = panelManager
@@ -77,12 +89,12 @@ class RangeSliderBar:
         self._applyVisibility()
 
     def build(self, parentTag=CONTAINER_TAG):
-        """Range Slider (etiket + overview plot + Start/End marker + shade) ve
-        Scroll Bar'i parentTag icine (varsayilan: centerTopPanel) DIKEY
-        SIRAYLA (etiket -> range slider -> scroll bar) cizer. Ucu, araya
-        DPG'nin varsayilan item-spacing'inin actigi bosluk kalmasin diye
-        TEK bir group icine alinip o group'a ItemSpacing=0 teması
-        baglaniyor (bkz. _applySpacingTheme)."""
+        """Range Slider (etiket + overview plot + secim dortgeni) ve Scroll
+        Bar'i parentTag icine (varsayilan: centerTopPanel) DIKEY SIRAYLA
+        (etiket -> range slider -> scroll bar) cizer. Ucu, araya DPG'nin
+        varsayilan item-spacing'inin actigi bosluk kalmasin diye TEK bir
+        group icine alinip o group'a ItemSpacing=0 teması baglaniyor (bkz.
+        _applySpacingTheme)."""
         with dpg.group(parent=parentTag, tag=self.CONTENT_GROUP_TAG):
             dpg.add_text("Range Slider", tag=self.RANGE_LABEL_TAG)
 
@@ -91,27 +103,35 @@ class RangeSliderBar:
                          pan_button=-1, fit_button=-1, box_select_button=-1,
                          context_menu_button=-1, zoom_rate=0):
                 dpg.add_plot_axis(dpg.mvXAxis, label="", tag=self.OVERVIEW_X_AXIS_TAG)
-                with dpg.plot_axis(dpg.mvYAxis, label="", tag=self.OVERVIEW_Y_AXIS_TAG):
-                    dpg.add_shade_series([0, 100], [0, 0], y2=[1, 1],
-                                         label="Selected Range", tag=self.SHADE_TAG)
-                    self._applyShadeTheme()
+                dpg.add_plot_axis(dpg.mvYAxis, label="", tag=self.OVERVIEW_Y_AXIS_TAG)
+            # Overview plot artik SEMBOLIK 0..100 (x) / 0..1 (y) bir "fraction
+            # uzayi" - gercek veriyle degil, aktif panelin gorunur X penceresinin
+            # TOPLAM veri araligindaki ORANIYLA (bkz. syncSliderToView) calisiyor.
+            # Kullanici etkilesimi zaten pan_button/fit_button/zoom_rate=0 ile
+            # KAPALI, o yuzden bu limitler BIR KERE sabitlenip bir daha
+            # DOKUNULMUYOR - dortgenin degerleri hep bu 0..100 uzayina gore
+            # yorumlanir.
+            dpg.set_axis_limits(self.OVERVIEW_X_AXIS_TAG, 0, 100)
+            dpg.set_axis_limits(self.OVERVIEW_Y_AXIS_TAG, 0, 1)
 
-            dpg.add_drag_line(tag=self.LEFT_MARKER_TAG, parent=self.OVERVIEW_PLOT_TAG,
-                              label="Start", default_value=0,
-                              color=(80, 160, 255, 255), thickness=2,
-                              vertical=True, no_fit=True)
-            dpg.add_drag_line(tag=self.RIGHT_MARKER_TAG, parent=self.OVERVIEW_PLOT_TAG,
-                              label="End", default_value=100,
-                              color=(80, 160, 255, 255), thickness=2,
-                              vertical=True, no_fit=True)
+            # ImPlot'un native drag_rect'i: 4 kenardan resize (zoom) VE ic
+            # kismindan tutup kaydirma (pan) native olarak destekleniyor -
+            # onceki ayri Start/End drag_line + statik shade_series ikilisinin
+            # yerine gecti (kullanici dortgeni SURUKLEYEMEDIGINI bildirdi -
+            # shade_series zaten interaktif bir item degil).
+            dpg.add_drag_rect(tag=self.RECT_TAG, parent=self.OVERVIEW_PLOT_TAG,
+                              label="Visible Range", default_value=(0, 0, 100, 1),
+                              color=(80, 160, 255, 90), no_fit=True,
+                              callback=self._onSliderRectDragged)
 
             dpg.add_spacer(height=6)
-            dpg.add_slider_int(tag=self.SCROLL_TAG, width=-1, height=14,
+            dpg.add_slider_int(tag=self.SCROLL_TAG, width=-1, height=11,
                                min_value=0, max_value=100, default_value=100,
                                no_input=True, callback=self._onScrollDragged)
 
         self._applySpacingTheme()
         self._applyContainerPaddingTheme(parentTag)
+        self._applyScrollTheme()
         self._applyVisibility()
 
     def _applyContainerPaddingTheme(self, containerTag):
@@ -128,6 +148,21 @@ class RangeSliderBar:
                     dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, 10, 2,
                                         category=dpg.mvThemeCat_Core)
         dpg.bind_item_theme(containerTag, self.PADDING_THEME_TAG)
+
+    def _applyScrollTheme(self):
+        """Scroll bar'in gercek kalinligi add_slider_int'e verilen height
+        parametresiyle DEGIL, guiManager._buildMenuBarHeightTheme'in main_
+        window'dan miras gelen FramePadding=(8,11) temasiyla belirleniyordu
+        (centerTopPanel bu temayi override etmiyor) - height=11/14 gibi
+        degerler bu yuzden GORSEL olarak hicbir etki yapmiyordu. compactControl
+        Theme'deki (DataManager combo'lariyla ayni) desenle, SADECE bu slider'a
+        ozel kucuk bir FramePadding baglayip gercekten inceltiyoruz."""
+        if not dpg.does_item_exist(self.SCROLL_THEME_TAG):
+            with dpg.theme(tag=self.SCROLL_THEME_TAG):
+                with dpg.theme_component(dpg.mvSliderInt):
+                    dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 4, 2,
+                                        category=dpg.mvThemeCat_Core)
+        dpg.bind_item_theme(self.SCROLL_TAG, self.SCROLL_THEME_TAG)
 
     def _applySpacingTheme(self):
         """CONTENT_GROUP_TAG icindeki etiket/plot/scrollbar arasinda DPG'nin
@@ -170,14 +205,6 @@ class RangeSliderBar:
         dpg.set_value(self.RANGE_LABEL_TAG, text)
         dpg.configure_item(self.RANGE_LABEL_TAG, show=bool(text))
 
-    def _applyShadeTheme(self):
-        if not dpg.does_item_exist(self.SHADE_THEME_TAG):
-            with dpg.theme(tag=self.SHADE_THEME_TAG):
-                with dpg.theme_component(dpg.mvShadeSeries):
-                    dpg.add_theme_color(dpg.mvPlotCol_Fill, (80, 160, 255, 35),
-                                        category=dpg.mvThemeCat_Plots)
-        dpg.bind_item_theme(self.SHADE_TAG, self.SHADE_THEME_TAG)
-
     def _anyPanelVisible(self):
         if self._panelManager is None:
             return False
@@ -200,6 +227,7 @@ class RangeSliderBar:
             show = self._anyPanelVisible() and (self._sliderVisible or self._scrollbarVisible)
             dpg.configure_item(self.CONTAINER_TAG, show=show)
         self._syncScrollToActivePanel()
+        self._syncSliderToActivePanel()
 
     def _syncScrollToActivePanel(self):
         """Her frame cagrilir - scroll bar'i aktif panelin O ANKI gorunur X
@@ -304,6 +332,100 @@ class RangeSliderBar:
         self._panelManager.panToFraction(panelId, fraction, liveOnly=True)
         self._scrollDragTickCount += 1
         if self._scrollDragTickCount % self.DRAG_Y_ADJUST_STRIDE == 0:
+            self._panelManager.adjustYAxis(panelId)
+
+    # ------------------------------------------------------- Range Slider (secim dortgeni)
+    def _syncSliderToActivePanel(self):
+        """Her frame cagrilir - scroll bar'daki _syncScrollToActivePanel ile
+        AYNI desen, TEK fark suruklemenin halen surdugunu tespit yontemi:
+        scroll bar standart bir widget oldugu icin dpg.is_item_active
+        guvenilir calisiyordu, ama secim dortgeni (drag_rect) plot-ici ozel
+        bir item - is_item_active DESTEGI garanti degil. Onun yerine "bu
+        cagridan beri en az bir _onSliderRectDragged event'i geldi mi"
+        (_sliderDragEventCount degisti mi) kontrolu kullaniliyor.
+
+        Suruklemenin surdugu tespit edilirse burasi calismaz, drag BITTIGI
+        (bir onceki cagrida aktifti, bu cagrida degil) anda
+        zoomToFractionRange(liveOnly=True) tarafindan kilitli birakilan x
+        eksenini unlockXAxis() ile acar + Y'yi SON KEZ adjust eder, digerinde
+        canli syncSliderToView() ile dortgenin konumunu gunceller.
+
+        unlockXAxis burada da getActivePanelId() ILE DEGIL, _sliderDragPanelId
+        (drag BASLARKEN _onSliderRectDragged'in kilitledigi panel) ile
+        cagrilir - ayni sebep: scroll bar'daki kilit/kilit-acma panel
+        eslesmezligi hatasi (bkz. _syncScrollToActivePanel)."""
+        if self._panelManager is None:
+            return
+        active = self._sliderDragEventCount != self._sliderDragEventSeen
+        self._sliderDragEventSeen = self._sliderDragEventCount
+        if self._sliderDragActive and not active:
+            panelId = self._sliderDragPanelId if self._sliderDragPanelId is not None \
+                else self._panelManager.getActivePanelId()
+            self._panelManager.unlockXAxis(panelId)
+            self._panelManager.adjustYAxis(panelId)
+            self._sliderDragTickCount = 0
+            self._sliderDragPanelId = None
+        self._sliderDragActive = active
+        if active:
+            return
+        self.syncSliderToView()
+
+    def syncSliderToView(self, panelId=None):
+        """Secim dortgeninin degerini panelin GORUNUR X penceresinin TOPLAM
+        veri icindeki ORANINA (0..100, bkz. overview eksenlerinin build()'te
+        sabitlenen 0..100/0..1 uzayi) gore gunceller - syncScrollToView'in
+        secim dortgeni karsiligi."""
+        if self._panelManager is None or not dpg.does_item_exist(self.RECT_TAG):
+            return
+        panelId = self._panelManager.getActivePanelId() if panelId is None else panelId
+        limits = self._panelManager.getXAxisLimits(panelId)
+        dataRange = self._panelManager.getFullXRange(panelId)
+        if limits is None or dataRange is None:
+            return
+        xMin, xMax = limits
+        dataMin, dataMax = dataRange
+        total = dataMax - dataMin
+        if total <= 0:
+            return
+        startFrac = max(0.0, min(1.0, (xMin - dataMin) / total)) * 100.0
+        endFrac = max(0.0, min(1.0, (xMax - dataMin) / total)) * 100.0
+        dpg.set_value(self.RECT_TAG, [startFrac, 0.0, endFrac, 1.0])
+
+    def _onSliderRectDragged(self, sender=None, appData=None):
+        """Secim dortgeni mouse ile suruklendiginde (kenardan resize/zoom VEYA
+        ic kismindan tutup kaydirma/pan - ImPlot'un drag_rect'i ikisini de
+        AYNI callback'e dusurur, hangisi oldugunu ayirt etmeye gerek yok)
+        cagrilir - syncSliderToView'in TERSI: dortgenin GUNCEL (xmin,xmax)
+        degerini okuyup aktif panelin X eksenini zoomToFractionRange
+        (liveOnly=True) ile bu araliga kilitler.
+
+        xmin/xmax MIN_GAP_FRACTION altina cokmesin (span sifirlanmasin) diye
+        clamp edilir; y (ymin/ymax) ise SEMBOLIK oldugu icin (gercek bir
+        anlami yok) kullanici ust/alt kenari surukleyip bozarsa bile her
+        tik'te 0..1'e geri sabitlenir - set_value ile dortgenin kendisine
+        de yaziliyor (yoksa gorsel olarak carpiklasir).
+
+        Kilitlenen panelId, scroll bar'daki AYNI desenle drag'in ILK
+        tik'inde _sliderDragPanelId'e sabitlenir (bkz. _syncSliderToActivePanel)."""
+        if self._panelManager is None:
+            return
+        self._sliderDragEventCount += 1
+        if self._sliderDragPanelId is None:
+            self._sliderDragPanelId = self._panelManager.getActivePanelId()
+        panelId = self._sliderDragPanelId
+
+        MIN_GAP_FRACTION = 1.0  # 0..100 uzayinda minimum xmin/xmax farki (yaklasik %1)
+        rect = dpg.get_value(self.RECT_TAG)
+        startVal = max(0.0, min(100.0, rect[0]))
+        endVal = max(0.0, min(100.0, rect[2]))
+        if endVal - startVal < MIN_GAP_FRACTION:
+            endVal = min(100.0, startVal + MIN_GAP_FRACTION)
+            startVal = max(0.0, endVal - MIN_GAP_FRACTION)
+        dpg.set_value(self.RECT_TAG, [startVal, 0.0, endVal, 1.0])
+
+        self._panelManager.zoomToFractionRange(panelId, startVal / 100.0, endVal / 100.0, liveOnly=True)
+        self._sliderDragTickCount += 1
+        if self._sliderDragTickCount % self.DRAG_Y_ADJUST_STRIDE == 0:
             self._panelManager.adjustYAxis(panelId)
 
     def _syncContainerHeight(self):

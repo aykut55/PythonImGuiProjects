@@ -475,6 +475,40 @@ class PanelManager:
             dpg.set_axis_limits_auto(xTag)
         return newMin, newMax
 
+    def zoomToFractionRange(self, panelId=None, startFraction=0.0, endFraction=1.0, liveOnly=False):
+        """RangeSliderBar'daki Start/End marker'lari suruklenince cagrilir -
+        panToFraction'in aksine GENISLIGI (span) DEGISTIRIR: TOPLAM veri
+        araliginin [startFraction, endFraction] (0..1) diliminin dogrudan
+        yeni x eksen limiti olmasini saglar (zoom). liveOnly=True aninda
+        panToFraction ile ayni sebeple (marker suruklenirken saniyede onlarca
+        kez tetiklenir) split_frame/set_axis_limits_auto ATLANIR - drag
+        bitince RangeSliderBar bir kere unlockXAxis() cagirir (bkz.
+        rangeSliderBar._syncSliderToActivePanel)."""
+        panelId = self.getActivePanelId() if panelId is None else panelId
+        panel = self._panels.get(panelId)
+        xTag = f"x_axis_{panelId}"
+        if panel is None or not dpg.does_item_exist(xTag):
+            return None
+
+        dataRange = self._fullXRangeForPanel(panel)
+        if dataRange is None:
+            return None
+        dataMin, dataMax = dataRange
+        total = dataMax - dataMin
+        startFraction = max(0.0, min(1.0, startFraction))
+        endFraction = max(0.0, min(1.0, endFraction))
+        if endFraction <= startFraction:
+            endFraction = min(1.0, startFraction + 0.001)
+
+        newMin = dataMin + startFraction * total
+        newMax = dataMin + endFraction * total
+
+        dpg.set_axis_limits(xTag, newMin, newMax)
+        if not liveOnly:
+            dpg.split_frame()
+            dpg.set_axis_limits_auto(xTag)
+        return newMin, newMax
+
     def unlockXAxis(self, panelId=None):
         """panToFraction(liveOnly=True) ile drag sirasinda KILITLI birakilan
         x eksenini serbest birakir (bkz. rangeSliderBar._syncScrollToActivePanel -
