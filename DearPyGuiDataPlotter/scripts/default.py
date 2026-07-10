@@ -92,6 +92,7 @@ class App:
         self.stochD = []
         self.signals = []
         self.signalSteps = []
+        self.signalDetails = []
         self.level0 = []
         self.level30 = []
         self.level50 = []
@@ -183,6 +184,7 @@ class App:
         self.sizes   = [int(v) for v in d.size]
         self.signals = []
         self.signalSteps = []
+        self.signalDetails = []
 
         im = IndicatorManager(self.xs, self.opens, self.highs, self.lows,
                               self.closes, self.volumes, self.sizes)
@@ -264,8 +266,10 @@ class App:
 
         n = min(len(ema1Ys), len(ema2Ys))
         signals = [None] * n
+        details = [None] * n
         position = None
         entryPrice = None
+        entryIndex = None
 
         def finite(v):
             try:
@@ -279,13 +283,27 @@ class App:
                 high = self.highs[i] if useHighLow and i < len(self.highs) else close
                 low = self.lows[i] if useHighLow and i < len(self.lows) else close
                 if finite(close) and finite(high) and finite(low):
-                    exitSignal = self._tradeExitSignal(
-                        position, entryPrice, float(high), float(low),
+                    exitDetail = self._tradeExitDetail(
+                        position, entryPrice, float(high), float(low), float(close),
                         takeProfitPct, stopLossPct)
-                    if exitSignal:
-                        signals[i] = exitSignal
+                    if exitDetail:
+                        signals[i] = "FLAT"
+                        pnl = (exitDetail["exitPrice"] - entryPrice) if position == "AL" else \
+                              (entryPrice - exitDetail["exitPrice"])
+                        details[i] = {
+                            "signal": "FLAT",
+                            "state": 0,
+                            "position": position,
+                            "entryIndex": entryIndex,
+                            "entryPrice": entryPrice,
+                            "exitPrice": exitDetail["exitPrice"],
+                            "exitReason": exitDetail["reason"],
+                            "pnl": pnl,
+                            "pnlPct": pnl / entryPrice if entryPrice else None,
+                        }
                         position = None
                         entryPrice = None
+                        entryIndex = None
                         continue
 
             prev1, prev2 = ema1Ys[i - 1], ema2Ys[i - 1]
@@ -295,32 +313,97 @@ class App:
 
             prevDiff = float(prev1) - float(prev2)
             curDiff = float(cur1) - float(cur2)
-
+            candidateSignal = None
             if prevDiff <= 0 < curDiff:
+                candidateSignal = "AL"
+            elif prevDiff >= 0 > curDiff:
+                candidateSignal = "SAT"
+
+            if candidateSignal is not None and position is not None:
+                skipReason = self._tradeSkipReason(candidateSignal, i, position,
+                                                   entryIndex, entryPrice)
+                if skipReason:
+                    details[i] = self._tradeSkipDetail(
+                        candidateSignal, i, position, entryIndex, entryPrice,
+                        reason=skipReason)
+                    continue
+
+            if candidateSignal == "AL":
                 signals[i] = "AL"
                 position = "AL"
                 entryPrice = float(self.closes[i]) if i < len(self.closes) and finite(self.closes[i]) else None
-            elif prevDiff >= 0 > curDiff:
+                entryIndex = i
+                details[i] = self._tradeEntryDetail("AL", i, entryPrice, takeProfitPct, stopLossPct)
+            elif candidateSignal == "SAT":
                 signals[i] = "SAT"
                 position = "SAT"
                 entryPrice = float(self.closes[i]) if i < len(self.closes) and finite(self.closes[i]) else None
+                entryIndex = i
+                details[i] = self._tradeEntryDetail("SAT", i, entryPrice, takeProfitPct, stopLossPct)
 
+        self.signalDetails = details
         return signals
 
-    def _tradeExitSignal(self, position, entryPrice, high, low, takeProfitPct, stopLossPct):
+    def _tradeEntryDetail(self, signal, index, entryPrice, takeProfitPct, stopLossPct):
+        if entryPrice is None:
+            return {"signal": signal, "state": 1 if signal == "AL" else -1,
+                    "position": signal, "entryIndex": index, "entryPrice": None}
+        if signal == "AL":
+            takeProfit = entryPrice * (1.0 + takeProfitPct) if takeProfitPct is not None else None
+            stopLoss = entryPrice * (1.0 - stopLossPct) if stopLossPct is not None else None
+        else:
+            takeProfit = entryPrice * (1.0 - takeProfitPct) if takeProfitPct is not None else None
+            stopLoss = entryPrice * (1.0 + stopLossPct) if stopLossPct is not None else None
+        return {
+            "signal": signal,
+            "state": 1 if signal == "AL" else -1,
+            "position": signal,
+            "entryIndex": index,
+            "entryPrice": entryPrice,
+            "takeProfitPrice": takeProfit,
+            "stopLossPrice": stopLoss,
+            "reason": "EMA_CROSS_UP" if signal == "AL" else "EMA_CROSS_DOWN",
+        }
+
+    def _tradeSkipDetail(self, candidateSignal, index, position, entryIndex, entryPrice, reason):
+        return {
+            "signal": "SKIP",
+            "state": 1 if position == "AL" else -1 if position == "SAT" else 0,
+            "candidateSignal": candidateSignal,
+            "position": position,
+            "entryIndex": entryIndex,
+            "entryPrice": entryPrice,
+            "reason": reason,
+            "index": index,
+        }
+
+    def _tradeSkipReason(self, candidateSignal, index, position, entryIndex, entryPrice):
+        if position is not None:
+            return "POSITION_OPEN"
+        return None
+
+    def _tradeExitDetail(self, position, entryPrice, high, low, close, takeProfitPct, stopLossPct):
         if takeProfitPct is None and stopLossPct is None:
             return None
 
         if position == "AL":
-            stopHit = stopLossPct is not None and low <= entryPrice * (1.0 - stopLossPct)
-            takeHit = takeProfitPct is not None and high >= entryPrice * (1.0 + takeProfitPct)
+            stopPrice = entryPrice * (1.0 - stopLossPct) if stopLossPct is not None else None
+            takePrice = entryPrice * (1.0 + takeProfitPct) if takeProfitPct is not None else None
+            stopHit = stopPrice is not None and low <= stopPrice
+            takeHit = takePrice is not None and high >= takePrice
         elif position == "SAT":
-            stopHit = stopLossPct is not None and high >= entryPrice * (1.0 + stopLossPct)
-            takeHit = takeProfitPct is not None and low <= entryPrice * (1.0 - takeProfitPct)
+            stopPrice = entryPrice * (1.0 + stopLossPct) if stopLossPct is not None else None
+            takePrice = entryPrice * (1.0 - takeProfitPct) if takeProfitPct is not None else None
+            stopHit = stopPrice is not None and high >= stopPrice
+            takeHit = takePrice is not None and low <= takePrice
         else:
             return None
 
-        return "FLAT" if (stopHit or takeHit) else None
+        if stopHit:
+            return {"reason": "STOP_LOSS", "exitPrice": stopPrice}
+        if takeHit:
+            return {"reason": "TAKE_PROFIT", "exitPrice": takePrice}
+        return None
 
     def generateTradeSignalsEma(self, *args, **kwargs):
         return self.generateTradeSignalsMa(*args, **kwargs)
