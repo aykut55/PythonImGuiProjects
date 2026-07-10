@@ -1,3 +1,4 @@
+import numpy as np
 import dearpygui.dearpygui as dpg
 
 
@@ -34,6 +35,8 @@ class RangeSliderBar:
     OVERVIEW_X_AXIS_TAG = "range_overview_x_axis"
     OVERVIEW_Y_AXIS_TAG = "range_overview_y_axis"
     RECT_TAG = "range_selection_rect"
+    CLOSE_SHADE_TAG = "range_overview_close_shade"
+    CLOSE_SHADE_THEME_TAG = "range_overview_close_shade_theme"
     SCROLL_TAG = "range_scroll"
     RANGE_LABEL_TAG = "range_slider_label"
     CONTENT_GROUP_TAG = "range_slider_bar_group"
@@ -73,6 +76,11 @@ class RangeSliderBar:
         # halen surdugu" bilgisi is_item_active YERINE "bu frame'den beri en az
         # bir _onSliderRectDragged event'i geldi mi" karsilastirmasiyla tespit
         # edilir - is_item_active desteklemese bile calisir.
+        self._closeOverviewPanelId = None  # en son golge/silüet cizilen panelId (bkz. _syncCloseOverview)
+        self._closeOverviewCount = -1      # en son golge cizilirken panelin dataCount'u - HER FRAME
+        # DEGIL, panel VEYA veri sayisi degisince yeniden hesaplanir (numpy normalize
+        # etmek pahali degil ama binlerce noktayi HER frame set_value'ya vermenin
+        # anlami yok, aktif panel/veri ayni kaldigi surece onceki sonuc hala gecerli).
 
     def setPanelManager(self, panelManager):
         self._panelManager = panelManager
@@ -113,6 +121,15 @@ class RangeSliderBar:
             # yorumlanir.
             dpg.set_axis_limits(self.OVERVIEW_X_AXIS_TAG, 0, 100)
             dpg.set_axis_limits(self.OVERVIEW_Y_AXIS_TAG, 0, 1)
+
+            # Aktif panelin 'ana' serisi (candle ise Close, bkz.
+            # PanelManager.getOverviewSeries) TAM veri boyunca 0..1'e normalize
+            # edilip bir golge/silüet olarak arkaya cizilir - secim dortgeninden
+            # ONCE eklendi ki dortgen ustte kalsin. Baslangicta bos, ilk
+            # _syncCloseOverview cagrisinda doldurulur.
+            dpg.add_shade_series([], [], y2=[], parent=self.OVERVIEW_Y_AXIS_TAG,
+                                 label="Close", tag=self.CLOSE_SHADE_TAG)
+            self._applyCloseShadeTheme()
 
             # ImPlot'un native drag_rect'i: 4 kenardan resize (zoom) VE ic
             # kismindan tutup kaydirma (pan) native olarak destekleniyor -
@@ -163,6 +180,80 @@ class RangeSliderBar:
                     dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 4, 2,
                                         category=dpg.mvThemeCat_Core)
         dpg.bind_item_theme(self.SCROLL_TAG, self.SCROLL_THEME_TAG)
+
+    def _applyCloseShadeTheme(self):
+        """Golge/silüet serisini (CLOSE_SHADE_TAG) hafif, notr bir dolguyla
+        boyar - secim dortgeninin (mavi, 80,160,255,90) rengiyle
+        KARISMASIN diye gri tonu ve DAHA DUSUK alpha secildi, boylece ikisi
+        UST USTE bindiginde de birbirinden ayirt edilebilir kalir."""
+        if not dpg.does_item_exist(self.CLOSE_SHADE_THEME_TAG):
+            with dpg.theme(tag=self.CLOSE_SHADE_THEME_TAG):
+                with dpg.theme_component(dpg.mvShadeSeries):
+                    dpg.add_theme_color(dpg.mvPlotCol_Fill, (150, 150, 150, 60),
+                                        category=dpg.mvThemeCat_Plots)
+        dpg.bind_item_theme(self.CLOSE_SHADE_TAG, self.CLOSE_SHADE_THEME_TAG)
+
+    # DENENDI, GORUNUMU BEGENILMEDI - eski 0..100 fraksiyon tik'lerine geri
+    # donuldu (bkz. _syncCloseOverview'daki cagrinin YORUM SATIRI olmasi).
+    # Overview eksenindeki tik ETIKETLERINI (pozisyonlar degil - onlar hep
+    # sabit 0..100 fraksiyon uzayinda kalir) gercek bar index'ine (0..count)
+    # map ediyordu - ImPlot'un varsayilan otomatik tik'lerinin YERINE
+    # set_axis_ticks ile SABIT 6 tik geciriliyordu:
+    #
+    # def _applyOverviewXTicks(self, count):
+    #     if not dpg.does_item_exist(self.OVERVIEW_X_AXIS_TAG):
+    #         return
+    #     if count <= 0:
+    #         dpg.set_axis_ticks(self.OVERVIEW_X_AXIS_TAG, ())
+    #         return
+    #     fractions = (0, 20, 40, 60, 80, 100)
+    #     ticks = tuple((str(int(round(f / 100.0 * count))), float(f)) for f in fractions)
+    #     dpg.set_axis_ticks(self.OVERVIEW_X_AXIS_TAG, ticks)
+
+    def _syncCloseOverview(self):
+        """Aktif panel VEYA veri sayisi degisince (her frame DEGIL - bkz.
+        __init__'teki _closeOverviewPanelId/_closeOverviewCount) overview
+        plot'un arka planindaki golge/silüet serisini yeniden hesaplar.
+
+        PanelManager.getOverviewSeries ham (xs, ys) TAM veri dizisini
+        dondurur (candle panelde ys = Close, bkz. oradaki docstring); burada
+        overview'in SEMBOLIK 0..100 (x) / 0..1 (y) uzayina normalize edilir:
+        x, getFullXRange (scroll/slider'in de kullandigi AYNI dataMin/dataMax)
+        ile secim dortgeniyle AYNI fraksiyon uzayina; y ise serinin kendi
+        min/max'ina gore 0..1'e olceklenir (span sifirsa 0.5'te DUZ bir
+        cizgi olur, sifira bolme hatasi olmaz)."""
+        if self._panelManager is None or not dpg.does_item_exist(self.CLOSE_SHADE_TAG):
+            return
+        panelId = self._panelManager.getActivePanelId()
+        count = self._panelManager.getPanelDataCount(panelId)
+        if panelId == self._closeOverviewPanelId and count == self._closeOverviewCount:
+            return
+        self._closeOverviewPanelId = panelId
+        self._closeOverviewCount = count
+        # self._applyOverviewXTicks(count)  # DENENDI, GORUNUMU BEGENILMEDI - eski
+        # 0..100 fraksiyon tik'lerine geri donuldu (bkz. yukaridaki yorumlu metod).
+
+        series = self._panelManager.getOverviewSeries(panelId)
+        dataRange = self._panelManager.getFullXRange(panelId)
+        if series is None or dataRange is None:
+            dpg.set_value(self.CLOSE_SHADE_TAG, [[], [], []])
+            return
+        xs, ys = series
+        dataMin, dataMax = dataRange
+        total = dataMax - dataMin
+        if total <= 0:
+            dpg.set_value(self.CLOSE_SHADE_TAG, [[], [], []])
+            return
+
+        xsArr = np.asarray(xs, dtype=np.float64)
+        ysArr = np.asarray(ys, dtype=np.float64)
+        xsFrac = (xsArr - dataMin) / total * 100.0
+        yMin = float(ysArr.min())
+        yMax = float(ysArr.max())
+        ySpan = yMax - yMin
+        ysFrac = np.full_like(ysArr, 0.5) if ySpan <= 0 else (ysArr - yMin) / ySpan
+        zeros = np.zeros_like(ysFrac)
+        dpg.set_value(self.CLOSE_SHADE_TAG, [xsFrac.tolist(), ysFrac.tolist(), zeros.tolist()])
 
     def _applySpacingTheme(self):
         """CONTENT_GROUP_TAG icindeki etiket/plot/scrollbar arasinda DPG'nin
@@ -228,6 +319,7 @@ class RangeSliderBar:
             dpg.configure_item(self.CONTAINER_TAG, show=show)
         self._syncScrollToActivePanel()
         self._syncSliderToActivePanel()
+        self._syncCloseOverview()
 
     def _syncScrollToActivePanel(self):
         """Her frame cagrilir - scroll bar'i aktif panelin O ANKI gorunur X

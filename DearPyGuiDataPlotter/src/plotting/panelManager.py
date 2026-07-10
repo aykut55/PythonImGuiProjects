@@ -1438,6 +1438,29 @@ class PanelManager:
             count = max(count, d.dataCount)
         return count
 
+    def getOverviewSeries(self, panelId=None):
+        """RangeSliderBar'daki overview plot'un arka planina 'golge' silüet
+        olarak cizilecek TAM veri serisini (xs, ys) dondurur - panel yok/veri
+        yoksa None. Panelin 'ana' serisini _pickInfoSourceData ile AYNI
+        sezgiyle secer (once timestamp'i olan gorunur seri, yoksa gorunur ilk
+        seri) - candle serilerinde ys zaten Close fiyatlaridir (bkz.
+        makeCandlePanelData: panelData.ys = closes), line serilerinde ys
+        kendi degeridir, o yuzden dataType farki gozetmeden hep ys kullanilir.
+        Full-data snapshot varsa (_fullXs/_fullYs, bkz. PanelData.setFullData)
+        onu, yoksa canli xs/ys listelerini kullanir."""
+        panelId = self.getActivePanelId() if panelId is None else panelId
+        panel = self._panels.get(panelId)
+        if panel is None:
+            return None
+        data = self._pickInfoSourceData(panel)
+        if data is None:
+            return None
+        xs = data._fullXs if data._fullXs is not None else data.xs
+        ys = data._fullYs if data._fullYs is not None else data.ys
+        if xs is None or ys is None or len(xs) == 0 or len(ys) == 0:
+            return None
+        return xs, ys
+
     def updateActivePanel(self):
         """render() tarafindan her frame cagrilir. Sadece 'hover' modunda is
         yapar - mouse'un ustunde oldugu plot'u bulup _activePanelId'i onunla
