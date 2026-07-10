@@ -234,6 +234,13 @@ class GuiManager:
     def _onShowInfoPanelChanged(self, sender=None, appData=None):
         self.panelManager.setInfoPanelMode("always" if appData else "hidden")
 
+    def _onShowBarNumbersChanged(self, sender=None, appData=None):
+        """checked -> x ekseninde ham bar numarasi ("bar" modu, PanelManager'in
+        varsayilani), unchecked -> secili/otomatik formatta DateTime ("datetime"
+        modu, format=None birakilinca PanelData.isIntraday'e gore otomatik
+        secilir - bkz. PanelManager.setXAxisMode docstring'i)."""
+        self.panelManager.setXAxisMode("bar" if appData else "datetime")
+
     def _onCrossHairModeChanged(self, sender=None, appData=None):
         self.panelManager.setCrossHairMode((appData or "all").lower())
 
@@ -571,14 +578,14 @@ class GuiManager:
                 with dpg.child_window(tag="topPanelGroupBox4", width=300, height=-1, border=True):
                     # RangeSliderBar'in (centerTopPanel'e gomulu) iki bagimsiz
                     # gorunurluk bayragini (bkz. rangeSliderBar.py setSliderVisible/
-                    # setScrollbarVisible) buradan yonetir. SliderRange default
-                    # UNCHECKED, ScrollBar default CHECKED - RangeSliderBar.__init__
-                    # 'deki _sliderVisible/_scrollbarVisible baslangic degerleri
-                    # buradaki default_value'larla EL ILE senkron tutulmali (DPG
-                    # default_value callback'i tetiklemiyor).
+                    # setScrollbarVisible) buradan yonetir. SliderRange VE ScrollBar
+                    # ikisi de default CHECKED - RangeSliderBar.__init__'deki
+                    # _sliderVisible/_scrollbarVisible baslangic degerleri buradaki
+                    # default_value'larla EL ILE senkron tutulmali (DPG default_value
+                    # callback'i tetiklemiyor).
                     with dpg.group(horizontal=True):
                         dpg.add_checkbox(label="Show SliderRange", tag="top_show_sliderange_checkbox",
-                                         default_value=False, callback=self._onShowSliderRangeChanged)
+                                         default_value=True, callback=self._onShowSliderRangeChanged)
                         dpg.add_text("CrossHair :")
                         dpg.add_combo(tag="top_crosshair_mode_combo", items=["Hidden", "Single", "All"],
                                      default_value="All", width=70,
@@ -590,6 +597,14 @@ class GuiManager:
                     # "hidden" (hicbir panelde gosterilmez).
                     dpg.add_checkbox(label="Show InfoPanel(s)", tag="top_show_infopanel_checkbox",
                                      default_value=True, callback=self._onShowInfoPanelChanged)
+                    # panelManager.setXAxisMode ile ayni fikir: checked -> "bar"
+                    # (ham bar numarasi - PanelManager'in ZATEN varsayilani, bkz.
+                    # PanelManager.__init__ self._xAxisMode="bar"), unchecked ->
+                    # "datetime" (secili/otomatik formatta tarih-saat). default_value
+                    # bu yuzden True - checkbox'in baslangic gorunumu PanelManager'in
+                    # gercek baslangic modundan (bar) FARKLI olmasin diye.
+                    dpg.add_checkbox(label="Show BarNumbers", tag="top_show_barnumbers_checkbox",
+                                     default_value=False, callback=self._onShowBarNumbersChanged)
         dpg.bind_item_theme("topPanelGroupBox1", self._buildCompactControlTheme())
         dpg.bind_item_theme("topPanelGroupBox2", self._buildCompactControlTheme())
         dpg.bind_item_theme("topPanelGroupBox3", self._buildCompactControlTheme())

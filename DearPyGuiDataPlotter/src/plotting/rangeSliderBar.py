@@ -50,7 +50,7 @@ class RangeSliderBar:
 
     def __init__(self):
         self._panelManager = None  # bkz. setPanelManager (guiManager tarafindan baglanir)
-        self._sliderVisible = False    # Range Slider (label+overview plot) gorunur mu.
+        self._sliderVisible = True    # Range Slider (label+overview plot) gorunur mu.
         # GUI'deki "top_show_sliderange_checkbox"un default_value'su False - DPG
         # default_value verilince callback'i TETIKLEMEDIGI icin buradaki
         # baslangic degeri checkbox'in gorsel varsayilaniyla EL ILE ayni
