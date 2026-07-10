@@ -56,6 +56,11 @@ class RangeSliderBar:
         self._scrollbarVisible = True  # Scroll Bar gorunur mu
         self._scrollDragActive = False  # bir onceki frame'de scroll bar suruklenirken miydi (bkz. _syncScrollToActivePanel)
         self._scrollDragTickCount = 0  # drag suresince kac _onScrollDragged tetiklendi (bkz. DRAG_Y_ADJUST_STRIDE)
+        self._scrollDragPanelId = None  # drag BASLARKEN kilitlenen panelId (bkz. _onScrollDragged/_syncScrollToActivePanel) -
+        # kilit acilirken de AYNI id kullanilmali, yoksa drag sirasinda aktif panel
+        # degisirse (ornegin drag bitis frame'inde baska bir panele tiklanirsa)
+        # yanlis panel unlockXAxis edilir ve gercekten kilitlenen panel x ekseni
+        # SONSUZA KADAR manuel/sabit limitte kilitli kalir (zoom/pan'a tepki vermez).
 
     def setPanelManager(self, panelManager):
         self._panelManager = panelManager
@@ -213,15 +218,23 @@ class RangeSliderBar:
         eder - HER TIK'te degil, ayrica _onScrollDragged icinde DRAG_Y_ADJUST_STRIDE
         tik'te bir de ARA adjust yapiliyor (surukleme suresince Y'nin de gozle
         gorulur sekilde takip etmesi icin, ama her tik'te degil - split_frame
-        maliyeti "dalga dalga" kekemelige yol aciyordu)."""
+        maliyeti "dalga dalga" kekemelige yol aciyordu).
+
+        unlockXAxis burada getActivePanelId() ILE DEGIL, _scrollDragPanelId
+        (drag BASLARKEN _onScrollDragged'in kilitledigi panel) ile cagrilir -
+        drag suresince aktif panel degisirse (ör. drag bitis frame'inde baska
+        bir panele tiklanirsa) yine de KILITLENEN panel acilir, YANLIS
+        (yeni aktif) panel degil."""
         if self._panelManager is None or not dpg.does_item_exist(self.SCROLL_TAG):
             return
         active = dpg.is_item_active(self.SCROLL_TAG)
         if self._scrollDragActive and not active:
-            panelId = self._panelManager.getActivePanelId()
+            panelId = self._scrollDragPanelId if self._scrollDragPanelId is not None \
+                else self._panelManager.getActivePanelId()
             self._panelManager.unlockXAxis(panelId)
             self._panelManager.adjustYAxis(panelId)
             self._scrollDragTickCount = 0
+            self._scrollDragPanelId = None
         self._scrollDragActive = active
         if active:
             return
@@ -272,10 +285,18 @@ class RangeSliderBar:
         Y ekseni HER tik'te degil, DRAG_Y_ADJUST_STRIDE tik'te BIR ARA adjust
         edilir - hem surukleme akici kalsin hem de kullanici Y'nin de takip
         ettigini gorsun diye orta yol (drag bitince zaten SON bir adjust daha
-        yapiliyor, bkz. _syncScrollToActivePanel)."""
+        yapiliyor, bkz. _syncScrollToActivePanel).
+
+        Kilitlenen panelId, drag'in ILK tik'inde _scrollDragPanelId'e
+        SABITLENIR - sonraki tik'ler (aktif panel bu arada degismis olsa
+        bile) hep AYNI panelin eksenini kilitler, boylece
+        _syncScrollToActivePanel drag bitince dogru paneli acar (bkz. orada
+        eklenen aciklama)."""
         if self._panelManager is None:
             return
-        panelId = self._panelManager.getActivePanelId()
+        if self._scrollDragPanelId is None:
+            self._scrollDragPanelId = self._panelManager.getActivePanelId()
+        panelId = self._scrollDragPanelId
         count = self._panelManager.getPanelDataCount(panelId)
         if count <= 0:
             return
