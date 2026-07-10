@@ -1,6 +1,7 @@
 import math
 import time
 
+import numpy as np
 import dearpygui.dearpygui as dpg
 
 from .panel import Panel
@@ -8,6 +9,10 @@ from .panel import Panel
 
 class PanelManager:
     COLLAPSED_PANEL_HEIGHT = 30  # collapseAllPanels'in kuculttugu sabit yukseklik (bkz. expandAllPanels)
+    LOD_ACTIVATION_THRESHOLD = 6000  # bu sayidan AZ toplam bar'i olan seriler HIC decimate edilmez (kucuk veri setlerinde davranis AYNEN eskisi gibi kalir)
+    LOD_MAX_POINTS = 3000  # LOD aktifken bir seriye cizilecek MAKSIMUM nokta sayisi (bkz. PanelData.getLodSlice)
+    OVERVIEW_LOD_MAX_POINTS = 800  # RangeSliderBar'daki overview 'golge' silüeti icin (bkz. getOverviewSeries) - 110px yukseklikte kucuk bir plot, ana grafiklerden COK daha az nokta yeterli
+    LOD_RANGE_CHANGE_RATIO = 0.08  # gorunur aralik onceki LOD guncellemesine gore span'in bu ORANINDAN fazla kayarsa/degisirse yeniden decimate edilir (bkz. _lodRangeChanged) - HER piksel/frame'de degil, "hysteresis" ile
 
     def __init__(self):
         self._panels = {}
@@ -47,6 +52,7 @@ class PanelManager:
         self._defaultViewN = 1000
         self._defaultViewN2 = 2000
         self._lastDrawnDataCount = {}  # {panelId: onceki drawPanelData'daki dataCount} - bkz. _maybeApplyDefaultViewOnLoad
+        self._lodLastRange = {}  # {panelId: (xMin,xMax) en son LOD guncellemesindeki gorunur aralik} - bkz. updateLod/_lodRangeChanged
 
     def setInteractionManager(self, interactionManager):
         self._interactionManager = interactionManager
@@ -142,6 +148,11 @@ class PanelManager:
         # dondurup Active Panel combosunu YANLIS/ERKEN doldurmaya devam
         # ediyordu.
         self._activePanelId = None
+        # Ayni sebep: LOD onbellegi de temizlenmezse yeni Run AYNI panelId'leri
+        # yeniden kullandiginda eski calismadan kalma bir gorunur-araliktan
+        # (xMin,xMax) karsilastirma yapilir - stale kalirsa ilk zoom/pan'a
+        # kadar gereksiz/eksik bir LOD durumunda kalinabilirdi.
+        self._lodLastRange.clear()
 
     # -------------------------------------------------------- panel sirasi
     def getPanelOrder(self):
@@ -212,33 +223,141 @@ class PanelManager:
     def drawPanelData(self, panelId):
         """Panelin dataList'indeki (candle/bar/line) serilerini + levels
         (hline/vline) cizgilerini plot'a basar. Tekrar cagrilabilir (once
-        y_axis'in tum eski cizimlerini siler). Zaman ekseni tick'leri/LOD
-        YOK - ham veriyle cizer. drawPanel'den SONRA cagrilmali (once kabuk
-        kurulmali: panel_{id}/y_axis_{id} var olmali)."""
+        y_axis'in tum eski cizimlerini siler). drawPanel'den SONRA cagrilmali
+        (once kabuk kurulmali: panel_{id}/y_axis_{id} var olmali).
+
+        BUYUK (fullCount > LOD_ACTIVATION_THRESHOLD) seriler ham TAM veriyle
+        DEGIL, ilk cizimde panelin TUM veri araligina gore decimate edilmis
+        (bkz. PanelData.getLodSlice) bir ozetle cizilir - 2M+ bar'lik bir
+        seride 2M noktayi DPG/ImPlot'a HER cizimde yollamak (Python->C
+        marshalling + GPU vertex sayisi) ciddi yavaslik yaratiyordu. Bu ilk
+        cizim sadece bir 'genel gorunum' - kullanici zoom/pan yaptikca
+        updateLod() (her frame render()'dan cagrilir) GERCEK gorunur araliga
+        gore yeniden decimate edip GUNCELLER (silip yeniden olusturmadan,
+        bkz. _drawOrUpdateSeries). Kucuk veri setlerinde (esigin altinda)
+        davranis AYNEN eskisi gibi - decimation hic devreye girmez."""
         panel = self._panels.get(panelId)
         yTag = f"y_axis_{panelId}"
         if panel is None or not dpg.does_item_exist(yTag):
             return
         dpg.delete_item(yTag, children_only=True)
+        dataRange = self._fullXRangeForPanel(panel)
+        xMin, xMax = dataRange if dataRange is not None else (0.0, 0.0)
         for d in panel.dataList:
             if not d.isVisible:
                 continue
-            if d.dataType == "candle" and d.open and d.high and d.low and d.close:
-                xs = d.xs if d.xs else list(range(len(d.open)))
-                dpg.add_candle_series(xs, d.open, d.close, d.low, d.high, label=d.name,
-                                      tag=f"candle_{panelId}_{d.id}",
-                                      parent=yTag, tooltip=False)
-            elif d.dataType == "bar" and d.volume:
-                xs = d.xs if d.xs else list(range(len(d.volume)))
-                dpg.add_bar_series(xs, d.volume, label=f"{d.name} Vol",
-                                   tag=f"bar_{panelId}_{d.id}", parent=yTag)
-            else:
-                dpg.add_line_series(d.xs, d.ys, label=d.name,
-                                    tag=f"line_{panelId}_{d.id}", parent=yTag)
+            self._drawOrUpdateSeries(panelId, d, xMin, xMax, yTag=yTag)
         self._drawLevels(panelId, panel)
         self._applyAxisPadding(panelId, panel)
         self.updateXAxisTicks(panelId)
         self._maybeApplyDefaultViewOnLoad(panelId)
+        # Taze cizim - onceki LOD imzasi artik GECERSIZ, bir sonraki
+        # updateLod() cagrisi (guncel gorunur araliga gore, _maybeApplyDefault
+        # ViewOnLoad'un uyguladigi olasi yeni View/Range dahil) YENIDEN
+        # decimate etsin diye onbellekten dusuruluyor.
+        self._lodLastRange.pop(panelId, None)
+
+    def _seriesTag(self, panelId, d):
+        if d.dataType == "candle":
+            return f"candle_{panelId}_{d.id}"
+        if d.dataType in ("bar", "volume"):
+            return f"bar_{panelId}_{d.id}"
+        return f"line_{panelId}_{d.id}"
+
+    def _drawOrUpdateSeries(self, panelId, d, xMin, xMax, yTag=None):
+        """Bir PanelData serisini (candle/bar/line) [xMin,xMax] bar-araligina
+        gore GEREKIRSE LOD-decimate ederek cizer (item YOKSA, yTag verilmis
+        olmali) veya GUNCELLER (item VARSA dpg.set_value ile - silip yeniden
+        OLUSTURMAZ, boylece z-order/tema/handler kaybi olmaz). fullCount
+        LOD_ACTIVATION_THRESHOLD'un altindaysa decimation hic YAPILMAZ
+        (kucuk veri setlerinde eski davranis aynen korunur, TAM veri
+        kullanilir)."""
+        tag = self._seriesTag(panelId, d)
+        exists = dpg.does_item_exist(tag)
+        if not exists and yTag is None:
+            return
+
+        useLod = d.fullCount > self.LOD_ACTIVATION_THRESHOLD
+        slice_ = d.getLodSlice(xMin, xMax, self.LOD_MAX_POINTS) if useLod else None
+
+        if d.dataType == "candle" and d.open and d.high and d.low and d.close:
+            if slice_ is not None:
+                xs, opens, closes = slice_["xs"], slice_["opens"], slice_["closes"]
+                lows, highs = slice_["lows"], slice_["highs"]
+            else:
+                xs = d.xs if d.xs else list(range(len(d.open)))
+                opens, closes, lows, highs = d.open, d.close, d.low, d.high
+            if exists:
+                dpg.set_value(tag, [xs, opens, closes, lows, highs])
+            else:
+                dpg.add_candle_series(xs, opens, closes, lows, highs, label=d.name,
+                                      tag=tag, parent=yTag, tooltip=False)
+        elif d.dataType in ("bar", "volume") and d.volume:
+            if slice_ is not None:
+                xs, ys = slice_["xs"], slice_["ys"]
+            else:
+                xs = d.xs if d.xs else list(range(len(d.volume)))
+                ys = d.volume
+            if exists:
+                dpg.set_value(tag, [xs, ys])
+            else:
+                dpg.add_bar_series(xs, ys, label=f"{d.name} Vol", tag=tag, parent=yTag)
+        else:
+            if slice_ is not None:
+                xs, ys = slice_["xs"], slice_["ys"]
+            else:
+                xs, ys = d.xs, d.ys
+            if exists:
+                dpg.set_value(tag, [xs, ys])
+            else:
+                dpg.add_line_series(xs, ys, label=d.name, tag=tag, parent=yTag)
+
+    def _lodRangeChanged(self, prev, current):
+        """Gorunur X araligi bir onceki LOD guncellemesine gore YETERINCE
+        (span'in LOD_RANGE_CHANGE_RATIO'sundan fazla) kaydi/degisti mi?
+        Tam esitlik DEGIL, hysteresis kullanilir - yoksa surekli zoom/pan
+        sirasinda HER frame yeniden decimate+set_value cagirmak (buyuk
+        serilerde yine de pahali) 'kekemelige' yol acardi (Auto Sync X/Y ve
+        RangeSliderBar'daki liveOnly desenleriyle AYNI felsefe: gereksiz
+        DPG cagrisini asgariye indirmek)."""
+        prevMin, prevMax = prev
+        curMin, curMax = current
+        prevSpan = max(prevMax - prevMin, 1e-9)
+        if abs(curMin - prevMin) > prevSpan * self.LOD_RANGE_CHANGE_RATIO:
+            return True
+        if abs(curMax - prevMax) > prevSpan * self.LOD_RANGE_CHANGE_RATIO:
+            return True
+        return False
+
+    def updateLod(self):
+        """Her frame render()'dan cagrilir - BUYUK (fullCount >
+        LOD_ACTIVATION_THRESHOLD) en az bir gorunur serisi olan panellerde,
+        gorunur X araligi ONCEKI LOD guncellemesinden beri YETERINCE
+        degistiyse (bkz. _lodRangeChanged) TUM serilerini GUNCEL gorunur
+        araliga gore yeniden decimate edip dpg.set_value ile gunceller.
+        Kucuk veri setlerinde (hasLargeData=False) bu metod PRATIKTE hicbir
+        sey yapmaz - tarama ucuz (panel/seri sayisi kadar, veri boyutuyla
+        ILGISIZ), asil pahali is (decimation) sadece gerektiginde calisir."""
+        for panelId, panel in list(self._panels.items()):
+            if not panel.getVisible():
+                continue
+            hasLargeData = any(d.isVisible and d.fullCount > self.LOD_ACTIVATION_THRESHOLD
+                              for d in panel.dataList)
+            if not hasLargeData:
+                continue
+            xTag = f"x_axis_{panelId}"
+            limits = self._axisLimits(xTag)
+            if limits is None:
+                continue
+            last = self._lodLastRange.get(panelId)
+            if last is not None and not self._lodRangeChanged(last, limits):
+                continue
+            self._lodLastRange[panelId] = limits
+            xMin, xMax = limits
+            for d in panel.dataList:
+                if not d.isVisible:
+                    continue
+                self._drawOrUpdateSeries(panelId, d, xMin, xMax)
 
     def _applyAxisPadding(self, panelId, panel,
                          xMarginRatio=0.02, yMarginRatio=0.08):
@@ -768,19 +887,66 @@ class PanelManager:
         return yMin, yMax
 
     def _visibleYRangeForData(self, data, xMin, xMax):
-        xs = data._fullXs if data._fullXs is not None else data.xs
+        """[xMin,xMax] GORUNUR araligindaki bir serinin (yMin,yMax) araligini
+        dondurur - adjustYAxis/_applyAxisPadding HER zoom/pan'de cagirir.
+
+        Numpy _full* snapshot'lari (bkz. PanelData.setFullData - Panel.addData/
+        setCandleData HER ZAMAN cagirir, o yuzden normalde YOKLUK olmaz)
+        varsa np.searchsorted (fullXs'in MONOTONIK ARTAN oldugu varsayimiyla,
+        bkz. PanelData.getLodSlice'daki AYNI not) ile O(log n + gorunur
+        dilim) surede hesaplanir - ONCEDEN saf Python for donguyle TUM
+        diziyi (2M+ bar'da HER cagrida 2M iterasyon) tariyordu, bu 2M-bar'lik
+        veride en buyuk yavaslik kaynaklarindan biriydi. _full* YOKSA (cok
+        nadir/edge-case) eski yavas ama genel yonteme (_visibleYRangeForDataSlow)
+        duser."""
+        fullXs = data._fullXs
+        if fullXs is None or len(fullXs) == 0:
+            return self._visibleYRangeForDataSlow(data, xMin, xMax)
+
+        if data.dataType == "candle" and data._fullLow is not None and data._fullHigh is not None:
+            lows, highs = data._fullLow, data._fullHigh
+        elif data.dataType in ("bar", "volume") and data._fullVolume is not None:
+            highs = data._fullVolume
+            lows = np.zeros_like(highs)
+        else:
+            values = data._fullYs
+            if values is None:
+                return None
+            lows = highs = values
+
+        n = min(len(fullXs), len(lows), len(highs))
+        if n == 0:
+            return None
+        xsArr = fullXs[:n]
+        startIdx = max(0, int(np.searchsorted(xsArr, xMin, side="left")))
+        endIdx = min(n, int(np.searchsorted(xsArr, xMax, side="right")))
+        if endIdx <= startIdx:
+            return None
+
+        lowsSlice = lows[startIdx:endIdx]
+        highsSlice = highs[startIdx:endIdx]
+        finiteMask = np.isfinite(lowsSlice) & np.isfinite(highsSlice)
+        if not finiteMask.any():
+            return None
+        return float(lowsSlice[finiteMask].min()), float(highsSlice[finiteMask].max())
+
+    def _visibleYRangeForDataSlow(self, data, xMin, xMax):
+        """_visibleYRangeForData'nin _full* numpy snapshot'i OLMAYAN (cok
+        nadir/edge-case) veri icin dustugu, saf Python liste taramali eski
+        yontem - dogrulugu KANITLI, sadece BUYUK veride yavas oldugu icin
+        birincil yol degil."""
+        xs = data.xs
         if data.dataType == "candle" and data.low and data.high:
-            lows = data._fullLow if data._fullLow is not None else data.low
-            highs = data._fullHigh if data._fullHigh is not None else data.high
+            lows, highs = data.low, data.high
             if len(xs) == 0:
                 xs = range(len(lows))
         elif data.dataType in ("bar", "volume") and data.volume:
-            highs = data._fullVolume if data._fullVolume is not None else data.volume
+            highs = data.volume
             lows = [0.0] * len(highs)
             if len(xs) == 0:
                 xs = range(len(highs))
         else:
-            values = data._fullYs if data._fullYs is not None else data.ys
+            values = data.ys
             lows = highs = values
             if len(xs) == 0:
                 xs = range(len(values))
@@ -1447,7 +1613,14 @@ class PanelManager:
         makeCandlePanelData: panelData.ys = closes), line serilerinde ys
         kendi degeridir, o yuzden dataType farki gozetmeden hep ys kullanilir.
         Full-data snapshot varsa (_fullXs/_fullYs, bkz. PanelData.setFullData)
-        onu, yoksa canli xs/ys listelerini kullanir."""
+        onu, yoksa canli xs/ys listelerini kullanir.
+
+        BUYUK (fullCount > LOD_ACTIVATION_THRESHOLD) serilerde TAM veri
+        DEGIL, PanelData.getLodXY ile OVERVIEW_LOD_MAX_POINTS'e decimate
+        edilmis bir ozet dondurulur - overview 110px yukseklikte kucuk bir
+        plot, 2M+ nokta gondermenin (hem hesaplama hem DPG'ye marshalling)
+        hicbir gorsel faydasi yok, sadece yavaslik/donma yaratirdi (ana
+        panel serilerindeki AYNI LOD mantigi, bkz. drawPanelData/updateLod)."""
         panelId = self.getActivePanelId() if panelId is None else panelId
         panel = self._panels.get(panelId)
         if panel is None:
@@ -1455,6 +1628,12 @@ class PanelManager:
         data = self._pickInfoSourceData(panel)
         if data is None:
             return None
+        if data.fullCount > self.LOD_ACTIVATION_THRESHOLD:
+            dataRange = self._fullXRangeForPanel(panel)
+            if dataRange is not None:
+                sliceXY = data.getLodXY(dataRange[0], dataRange[1], self.OVERVIEW_LOD_MAX_POINTS)
+                if sliceXY is not None:
+                    return sliceXY
         xs = data._fullXs if data._fullXs is not None else data.xs
         ys = data._fullYs if data._fullYs is not None else data.ys
         if xs is None or ys is None or len(xs) == 0 or len(ys) == 0:
@@ -1754,7 +1933,9 @@ class PanelManager:
         readout'lari mouse/mod degisikligine gore guncel kalir.
         updateMousePosOverlays() ham (x,y) mouse-pos metnini gunceller.
         updateCrossHairOverlays() panel basina crosshair'i gunceller.
-        updateActivePanel() 'hover' modundaysa aktif paneli gunceller."""
+        updateActivePanel() 'hover' modundaysa aktif paneli gunceller.
+        updateLod() buyuk (2M+ bar gibi) serilerde gorunur araliga gore
+        decimate edilmis veriyi gunceller (bkz. orada)."""
         self.sync()
         if self._xAxisMode == "datetime":
             self.updateXAxisTicks()
@@ -1762,6 +1943,7 @@ class PanelManager:
         self.updateMousePosOverlays()
         self.updateCrossHairOverlays()
         self.updateActivePanel()
+        self.updateLod()
         now = time.time()
         if now - self._lastRenderPrint >= 1.0:
             self._lastRenderPrint = now
