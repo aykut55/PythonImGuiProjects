@@ -277,6 +277,17 @@ class App:
         # pm.drawPanels()/drawAllPanelData() YOK - tekil eylem, script kendi
         # dongusunu kurar. drawPanel: kabuk (child_window+plot+eksenler).
         # drawPanelData: kabugun icine gercek candle/line serilerini basar.
+        #
+        # DENENDI: bu satir kaldirilip centerTopPanel'in show'u SADECE
+        # RangeSliderBar.sync()'e (frame-callback zinciri, bkz. GuiManager.
+        # _onRenderTick) birakilmisti - ama sync() panellerin bu dongude
+        # cizilmesinden EN AZ BIR REAL FRAME GERIDEN geldigi icin bu daha
+        # KOTU bir sekans (once plotlar, sonra container) ortaya cikardi.
+        # Panel/RangeSlider'in AYNI anda gorunmesi icin show=True'nun
+        # PLOTLARLA AYNI senkron cagri icinde (draw() burada) set edilmesi
+        # gerekiyor - RangeSliderBar.sync() ile cift-otorite olsa da
+        # (checkbox'lar kapatilirsa bir sonraki frame'de zaten duzeltiliyor)
+        # geri eklendi.
         dpg.configure_item("centerTopPanel", show=True)
         for p in pm.iterateAllPanels():
             pm.drawPanel(p.id)
