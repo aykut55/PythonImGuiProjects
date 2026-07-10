@@ -1,3 +1,5 @@
+import time
+
 import dearpygui.dearpygui as dpg
 
 from .consolePanel import ConsolePanel
@@ -99,6 +101,18 @@ class GuiManager:
                                      StockDataReader=StockDataReader, FilterMode=FilterMode,
                                      IndicatorManager=IndicatorManager)
         self._renderLoopStarted = False
+        self._autoSyncXEnabled = True  # bkz. _onAutoSyncXChanged - GUI'deki
+        # "top_auto_sync_x_checkbox"un default_value'su ile EL ILE senkron
+        # tutulmali (DPG default_value callback'i tetiklemiyor).
+        self._lastAutoSyncXTime = 0.0  # throttle icin (bkz. render())
+        self._autoSyncXIntervalSec = 0.15  # saniyede ~6-7 kez - _onAdjustXAxisAll/
+        # _onAdjustYAxisAll HER cagrida split_frame() kullaniyor (bkz.
+        # panelManager.py) - bunu HER frame (60/sn) cagirmak agir/kekeme
+        # olurdu, bu yuzden zaman bazli throttle var (Manuel "Adjust X Axes
+        # All"/"Adjust Y Axis (all)" dugmelerine periyodik basmanin AYNISI).
+        self._autoSyncYEnabled = True  # bkz. _onAutoSyncYChanged
+        self._lastAutoSyncYTime = 0.0  # throttle icin (bkz. render()) - Auto
+        # Sync X ile AYNI sebep/deger (_autoSyncXIntervalSec'i PAYLASIR).
         self._topViewModeValues = {}  # {mode: {field: value}} - bkz. seedTopViewRangeInputs/_saveTopViewModeValues
         self._lastTopViewMode = "FitToScreen (Ultra)"  # _onTopViewModeChanged'in "cikilan mod" takibi - combo'nun gorsel varsayilaniyla (topViewModes[2]) AYNI olmali
         self.isDarkTheme = True
@@ -173,8 +187,52 @@ class GuiManager:
         self.panelManagerWindow.render()
         self._refreshActivePanelCombo()
         self._alignTopViewNRow()
+        self._alignAutoSyncCheckboxes()
         self._syncViewStatusText()
+        self._updateAutoSyncX()
+        self._updateAutoSyncY()
         self.interactionManager.onTick()
+
+    def _updateAutoSyncX(self):
+        """"Auto Sync X" checkbox'i acikken, "Adjust X Axes All" dugmesinin
+        AYNI mantigini (_onAdjustXAxisAll) periyodik olarak (throttle'lu, bkz.
+        _autoSyncXIntervalSec) kendimiz cagiriyoruz - kullanicinin butona
+        elle basmasina gerek kalmadan aktif paneldeki HERHANGI bir degisiklik
+        (View/Range Apply, Pan butonlari, box-select, wheel-zoom, mouse-drag,
+        Range Slider/Scroll Bar, script...) birkac yuzde saniye icinde
+        digerlerine yayilir. BILEREK _onAdjustAllAxes DEGIL: o, src panelin
+        Y eksenini de adjustYAxis ile GUNCELLIYOR (manuel tek-seferlik "Adjust
+        All" tiklamasi icin dogru, ama periyodik/surekli cagrilinca src
+        panelde kullanicinin kendi Y zoom/pan'ini SUREKLI EZIYORDU - kullanici
+        bunu bildirdi). _onAdjustXAxisAll SADECE X'i (mode='x') yayar, src'nin
+        Y'sine hic dokunmaz - Adjust X Axes All dugmesiyle test edilip dogru
+        calistigi dogrulandi. Ozel bir 'degisti mi' takibi/kilit-acma state
+        machine'i YOK - zaten kanitlanmis akis (readPanelPlotParams +
+        scheduleSyncOthers, isPanelReadyForSourceParams'a gore pending kalan
+        hedefleri kendisi tekrar dener) ne zaman cagrilirsa cagrilsin GUVENLI,
+        biz sadece bunu periyodik tetikliyoruz."""
+        if not self._autoSyncXEnabled:
+            return
+        now = time.time()
+        if now - self._lastAutoSyncXTime < self._autoSyncXIntervalSec:
+            return
+        self._lastAutoSyncXTime = now
+        self._onAdjustXAxisAll()
+
+    def _updateAutoSyncY(self):
+        """"Auto Sync Y" checkbox'i acikken, "Adjust Y Axis (all)" dugmesinin
+        AYNI mantigini (_onAdjustYAxisAll -> panelManager.adjustAllYAxes) periyodik
+        olarak (throttle'lu, Auto Sync X ile AYNI _autoSyncXIntervalSec) kendimiz
+        cagiriyoruz - TUM panellerin Y eksenini kendi O ANKI gorunur X
+        penceresindeki datasina gore surekli fit'ler, kullanicinin butona elle
+        basmasina gerek kalmaz."""
+        if not self._autoSyncYEnabled:
+            return
+        now = time.time()
+        if now - self._lastAutoSyncYTime < self._autoSyncXIntervalSec:
+            return
+        self._lastAutoSyncYTime = now
+        self._onAdjustYAxisAll()
 
     def _syncViewStatusText(self):
         """Her frame cagrilir - bottom paneldeki status'u aktif panelin O ANKI
@@ -243,6 +301,12 @@ class GuiManager:
 
     def _onCrossHairModeChanged(self, sender=None, appData=None):
         self.panelManager.setCrossHairMode((appData or "all").lower())
+
+    def _onAutoSyncXChanged(self, sender=None, appData=None):
+        self._autoSyncXEnabled = bool(appData)
+
+    def _onAutoSyncYChanged(self, sender=None, appData=None):
+        self._autoSyncYEnabled = bool(appData)
 
     def _onReadSrcParams(self, sender=None, appData=None):
         params = self.panelManager.readPanelPlotParams()
@@ -435,6 +499,23 @@ class GuiManager:
         row1H = dpg.get_item_rect_size("top_view_row1")[1]
         dpg.set_item_pos("top_view_n_row", (comboX, row1Y + row1H + 4))
 
+    def _alignAutoSyncCheckboxes(self):
+        """"Auto Sync X" ve "Auto Sync Y" checkbox'larini top_crosshair_label
+        ile SOLDAN hizalar - _alignTopViewNRow ile AYNI desen (dpg.get_item_pos
+        okuyup dpg.set_item_pos ile bir baska item'i hizalamak), her frame
+        render()'dan cagrilir. Y konumuna DOKUNMAZ - X sirasiyla
+        top_infopanel_row/top_barnumbers_row'da (Show InfoPanel(s)/Show
+        BarNumbers ile ayni satirda) kalirlar, sadece X'leri CrossHair
+        etiketinin X'iyle AYNI olacak sekilde degistirilir - ikisi AYNI X'te
+        oldugu icin Auto Sync X, Auto Sync Y'nin tam USTUNDE durur."""
+        if not dpg.does_item_exist("top_crosshair_label"):
+            return
+        labelX = dpg.get_item_pos("top_crosshair_label")[0]
+        for tag in ("top_auto_sync_x_checkbox", "top_auto_sync_y_checkbox"):
+            if dpg.does_item_exist(tag):
+                currentY = dpg.get_item_pos(tag)[1]
+                dpg.set_item_pos(tag, (labelX, currentY))
+
     def _refreshActivePanelCombo(self):
         """active_panel_plot_combo'yu panelManager'daki GUNCEL panel
         listesiyle + panelManager.getActivePanelId() ile GUNCEL aktif
@@ -586,25 +667,46 @@ class GuiManager:
                     with dpg.group(horizontal=True):
                         dpg.add_checkbox(label="Show SliderRange", tag="top_show_sliderange_checkbox",
                                          default_value=True, callback=self._onShowSliderRangeChanged)
-                        dpg.add_text("CrossHair :")
+                        dpg.add_text("CrossHair :", tag="top_crosshair_label")
                         dpg.add_combo(tag="top_crosshair_mode_combo", items=["Hidden", "Single", "All"],
                                      default_value="All", width=70,
                                      callback=self._onCrossHairModeChanged)
                     dpg.add_checkbox(label="Show ScrollBar", tag="top_show_scrollbar_checkbox",
                                      default_value=True, callback=self._onShowScrollBarChanged)
-                    # panelManager.setInfoPanelMode ile ayni fikir: checked ->
-                    # "always" (tum panellerde sabit gosterilir), unchecked ->
-                    # "hidden" (hicbir panelde gosterilmez).
-                    dpg.add_checkbox(label="Show InfoPanel(s)", tag="top_show_infopanel_checkbox",
-                                     default_value=True, callback=self._onShowInfoPanelChanged)
-                    # panelManager.setXAxisMode ile ayni fikir: checked -> "bar"
-                    # (ham bar numarasi - PanelManager'in ZATEN varsayilani, bkz.
-                    # PanelManager.__init__ self._xAxisMode="bar"), unchecked ->
-                    # "datetime" (secili/otomatik formatta tarih-saat). default_value
-                    # bu yuzden True - checkbox'in baslangic gorunumu PanelManager'in
-                    # gercek baslangic modundan (bar) FARKLI olmasin diye.
-                    dpg.add_checkbox(label="Show BarNumbers", tag="top_show_barnumbers_checkbox",
-                                     default_value=False, callback=self._onShowBarNumbersChanged)
+                    with dpg.group(horizontal=True, tag="top_infopanel_row"):
+                        # panelManager.setInfoPanelMode ile ayni fikir: checked ->
+                        # "always" (tum panellerde sabit gosterilir), unchecked ->
+                        # "hidden" (hicbir panelde gosterilmez).
+                        dpg.add_checkbox(label="Show InfoPanel(s)", tag="top_show_infopanel_checkbox",
+                                         default_value=True, callback=self._onShowInfoPanelChanged)
+                        # Acikken "Adjust X Axes All" dugmesinin AYNI mantigini
+                        # periyodik (throttle'lu, bkz. _updateAutoSyncX) kendimiz
+                        # cagirir - bkz. o metodun docstring'i. default CHECKED
+                        # (dogrulandi, bkz. _updateAutoSyncX'teki not) -
+                        # self._autoSyncXEnabled baslangic degeriyle EL ILE
+                        # senkron tutulmali (DPG default_value callback'i
+                        # tetiklemiyor). Konumu top_crosshair_label ile SOLDAN
+                        # hizalanir (bkz. _alignAutoSyncCheckboxes) - alttaki
+                        # Auto Sync Y ile AYNI X'te, boylece tam UZERINDE durur.
+                        dpg.add_checkbox(label="Auto Sync X", tag="top_auto_sync_x_checkbox",
+                                         default_value=True, callback=self._onAutoSyncXChanged)
+                    with dpg.group(horizontal=True, tag="top_barnumbers_row"):
+                        # panelManager.setXAxisMode ile ayni fikir: checked -> "bar"
+                        # (ham bar numarasi - PanelManager'in ZATEN varsayilani, bkz.
+                        # PanelManager.__init__ self._xAxisMode="bar"), unchecked ->
+                        # "datetime" (secili/otomatik formatta tarih-saat). default_value
+                        # bu yuzden True - checkbox'in baslangic gorunumu PanelManager'in
+                        # gercek baslangic modundan (bar) FARKLI olmasin diye.
+                        dpg.add_checkbox(label="Show BarNumbers", tag="top_show_barnumbers_checkbox",
+                                         default_value=False, callback=self._onShowBarNumbersChanged)
+                        # Auto Sync X'in Y-ekseni karsiligi - "Adjust Y Axis (all)"
+                        # dugmesinin AYNI mantigini periyodik cagirir (bkz.
+                        # _updateAutoSyncY). Konumu top_crosshair_label ile SOLDAN
+                        # hizalanir (bkz. _alignAutoSyncCheckboxes, her frame
+                        # render()'dan cagrilir) - Auto Sync X ile AYNI X'te
+                        # oldugu icin tam ALTINDA durur.
+                        dpg.add_checkbox(label="Auto Sync Y", tag="top_auto_sync_y_checkbox",
+                                         default_value=True, callback=self._onAutoSyncYChanged)
         dpg.bind_item_theme("topPanelGroupBox1", self._buildCompactControlTheme())
         dpg.bind_item_theme("topPanelGroupBox2", self._buildCompactControlTheme())
         dpg.bind_item_theme("topPanelGroupBox3", self._buildCompactControlTheme())
