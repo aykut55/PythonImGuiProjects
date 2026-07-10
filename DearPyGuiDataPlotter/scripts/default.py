@@ -55,6 +55,8 @@ SHOW_TRADE_SIGNALS = False
 SHOW_TRADE_SIGNAL_LINES = True
 COLOR_BARS_BY_SIGNAL = True
 TRADE_SIGNAL_DRAW_DELAY_FRAMES = 1
+TRADE_SIGNAL_TAKE_PROFIT_PCT = 0.03
+TRADE_SIGNAL_STOP_LOSS_PCT = 0.015
 
 
 class App:
@@ -183,11 +185,16 @@ class App:
         im = IndicatorManager(self.xs, self.opens, self.highs, self.lows,
                               self.closes, self.volumes, self.sizes)
 
-        self.emas = [(i, f"EMA{p}", im.ema(p)) for i, p in enumerate([8, 13, 21], start=1)]
+        self.emas = [(i, f"EMA{p}", im.ema(p)) for i, p in enumerate([50, 100, 200], start=1)]
         self.rsiYs = im.rsi(14)
         self.macdLine, self.macdSignal, self.macdHist = im.macd(12, 26, 9)
         self.stochK, self.stochD = im.stochastic(14, 3)
-        self.signals = self.generateTradeSignalsMa(self.emas[0][2], self.emas[1][2])
+        self.signals = self.generateTradeSignalsMa(
+            self.emas[0][2],
+            self.emas[1][2],
+            takeProfitPct=TRADE_SIGNAL_TAKE_PROFIT_PCT,
+            stopLossPct=TRADE_SIGNAL_STOP_LOSS_PCT,
+        )
 
         # Sabit seviye cizgileri (RSI/Stochastic referanslari icin) - pool'a
         # "Levels" grubunda gidecek (bkz. fillPool).
@@ -237,13 +244,15 @@ class App:
 
         return signals
 
-    def generateTradeSignalsMa(self, ema1Ys=None, ema2Ys=None, warmup=1):
-        """Iki EMA serisinin kesismelerinden OHLC ile ayni uzunlukta sinyal listesi uretir.
+    def generateTradeSignalsMa(self, ema1Ys=None, ema2Ys=None, *,
+                               takeProfitPct=None, stopLossPct=None,
+                               useHighLow=True, warmup=1):
+        """Iki EMA serisinin kesismelerinden ve TP/SL kosullarindan sinyal uretir.
 
         AL: ema1, ema2'yi asagidan yukari keser.
         SAT: ema2, ema1'i asagidan yukari keser. Baska bir ifadeyle ema1,
         ema2'nin altina iner.
-        FLAT uretilmez.
+        FLAT: pozisyondayken takeProfitPct veya stopLossPct kosulu gerceklesirse uretilir.
         """
         if ema1Ys is None:
             ema1Ys = self.emas[0][2] if len(self.emas) >= 1 else []
@@ -252,6 +261,8 @@ class App:
 
         n = min(len(ema1Ys), len(ema2Ys))
         signals = [None] * n
+        position = None
+        entryPrice = None
 
         def finite(v):
             try:
@@ -260,6 +271,20 @@ class App:
                 return False
 
         for i in range(max(1, warmup), n):
+            if position is not None and entryPrice is not None:
+                close = self.closes[i] if i < len(self.closes) else None
+                high = self.highs[i] if useHighLow and i < len(self.highs) else close
+                low = self.lows[i] if useHighLow and i < len(self.lows) else close
+                if finite(close) and finite(high) and finite(low):
+                    exitSignal = self._tradeExitSignal(
+                        position, entryPrice, float(high), float(low),
+                        takeProfitPct, stopLossPct)
+                    if exitSignal:
+                        signals[i] = exitSignal
+                        position = None
+                        entryPrice = None
+                        continue
+
             prev1, prev2 = ema1Ys[i - 1], ema2Ys[i - 1]
             cur1, cur2 = ema1Ys[i], ema2Ys[i]
             if not (finite(prev1) and finite(prev2) and finite(cur1) and finite(cur2)):
@@ -270,10 +295,29 @@ class App:
 
             if prevDiff <= 0 < curDiff:
                 signals[i] = "AL"
+                position = "AL"
+                entryPrice = float(self.closes[i]) if i < len(self.closes) and finite(self.closes[i]) else None
             elif prevDiff >= 0 > curDiff:
                 signals[i] = "SAT"
+                position = "SAT"
+                entryPrice = float(self.closes[i]) if i < len(self.closes) and finite(self.closes[i]) else None
 
         return signals
+
+    def _tradeExitSignal(self, position, entryPrice, high, low, takeProfitPct, stopLossPct):
+        if takeProfitPct is None and stopLossPct is None:
+            return None
+
+        if position == "AL":
+            stopHit = stopLossPct is not None and low <= entryPrice * (1.0 - stopLossPct)
+            takeHit = takeProfitPct is not None and high >= entryPrice * (1.0 + takeProfitPct)
+        elif position == "SAT":
+            stopHit = stopLossPct is not None and high >= entryPrice * (1.0 + stopLossPct)
+            takeHit = takeProfitPct is not None and low <= entryPrice * (1.0 - takeProfitPct)
+        else:
+            return None
+
+        return "FLAT" if (stopHit or takeHit) else None
 
     def generateTradeSignalsEma(self, *args, **kwargs):
         return self.generateTradeSignalsMa(*args, **kwargs)

@@ -114,7 +114,7 @@ class GuiManager:
         # panelManager.py) - bunu HER frame (60/sn) cagirmak agir/kekeme
         # olurdu, bu yuzden zaman bazli throttle var (Manuel "Adjust X Axes
         # All"/"Adjust Y Axis (all)" dugmelerine periyodik basmanin AYNISI).
-        self._autoSyncYEnabled = True  # bkz. _onAutoSyncYChanged
+        self._autoSyncYEnabled = False  # bkz. _onAutoSyncYChanged
         self._lastAutoSyncYTime = 0.0  # throttle icin (bkz. render()) - Auto
         # Sync X ile AYNI sebep/deger (_autoSyncXIntervalSec'i PAYLASIR).
         self._deferredCallbacks = []  # [{"frames": int, "callback": callable}]
@@ -251,7 +251,7 @@ class GuiManager:
         if now - self._lastAutoSyncXTime < self._autoSyncXIntervalSec:
             return
         self._lastAutoSyncXTime = now
-        self._onAdjustXAxisAll()
+        self._onAdjustXAxisAll(updateStatus=False)
 
     def _updateAutoSyncY(self):
         """"Auto Sync Y" checkbox'i acikken, "Adjust Y Axis (all)" dugmesinin
@@ -266,7 +266,7 @@ class GuiManager:
         if now - self._lastAutoSyncYTime < self._autoSyncXIntervalSec:
             return
         self._lastAutoSyncYTime = now
-        self._onAdjustYAxisAll()
+        self._onAdjustYAxisAll(updateStatus=False)
 
     def _syncViewStatusText(self):
         """Her frame cagrilir - bottom paneldeki status'u aktif panelin O ANKI
@@ -365,9 +365,10 @@ class GuiManager:
         ok = self.panelManager.adjustYAxis(panelId)
         self._setStatusText(f"Adjusted Y: panel {panelId}" if ok else "Adjusted Y: no active panel")
 
-    def _onAdjustYAxisAll(self, sender=None, appData=None):
+    def _onAdjustYAxisAll(self, sender=None, appData=None, updateStatus=True):
         count = self.panelManager.adjustAllYAxes()
-        self._setStatusText(f"Adjusted Y: {count} panels")
+        if updateStatus:
+            self._setStatusText(f"Adjusted Y: {count} panels")
 
     def _onResetViewSrc(self, sender=None, appData=None):
         # "Reset" artik TAM VERIYE degil, View/Range combosunda O AN secili
@@ -391,13 +392,15 @@ class GuiManager:
         count = self.panelManager.applyViewModeToAllPanels(mode, n=n, n2=n2)
         self._setStatusText(f"Reset View: {count} panels ({mode})")
 
-    def _onAdjustXAxisAll(self, sender=None, appData=None):
+    def _onAdjustXAxisAll(self, sender=None, appData=None, updateStatus=True):
         params = self.panelManager.readPanelPlotParams()
         if not params or not params.get("xAxisLimits"):
-            self._setStatusText("Adjust X: no active source X")
+            if updateStatus:
+                self._setStatusText("Adjust X: no active source X")
             return
         pending = self.interactionManager.scheduleSyncOthers(params, mode="x")
-        self._setStatusText(f"Adjust X: pending {pending} panel(s)")
+        if updateStatus:
+            self._setStatusText(f"Adjust X: pending {pending} panel(s)")
 
     def _onAdjustAllAxes(self, sender=None, appData=None):
         # scheduleSyncOthers SADECE "diger" panellere uygular (src'ye dokunmaz -
@@ -743,7 +746,7 @@ class GuiManager:
                         # render()'dan cagrilir) - Auto Sync X ile AYNI X'te
                         # oldugu icin tam ALTINDA durur.
                         dpg.add_checkbox(label="Auto Sync Y", tag="top_auto_sync_y_checkbox",
-                                         default_value=True, callback=self._onAutoSyncYChanged)
+                                         default_value=False, callback=self._onAutoSyncYChanged)
                     dpg.add_checkbox(label="Show OHLC", tag="top_show_ohlc_checkbox",
                                      default_value=True, callback=self._onShowOhlcChanged)
         dpg.bind_item_theme("topPanelGroupBox1", self._buildCompactControlTheme())
