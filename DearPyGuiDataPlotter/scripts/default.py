@@ -91,6 +91,7 @@ class App:
         self.stochK = []
         self.stochD = []
         self.signals = []
+        self.signalSteps = []
         self.level0 = []
         self.level30 = []
         self.level50 = []
@@ -181,6 +182,7 @@ class App:
         self.volumes = [float(v) for v in d.volume]
         self.sizes   = [int(v) for v in d.size]
         self.signals = []
+        self.signalSteps = []
 
         im = IndicatorManager(self.xs, self.opens, self.highs, self.lows,
                               self.closes, self.volumes, self.sizes)
@@ -195,6 +197,7 @@ class App:
             takeProfitPct=TRADE_SIGNAL_TAKE_PROFIT_PCT,
             stopLossPct=TRADE_SIGNAL_STOP_LOSS_PCT,
         )
+        self.signalSteps = self.generateSignalSteps(self.signals)
 
         # Sabit seviye cizgileri (RSI/Stochastic referanslari icin) - pool'a
         # "Levels" grubunda gidecek (bkz. fillPool).
@@ -322,6 +325,23 @@ class App:
     def generateTradeSignalsEma(self, *args, **kwargs):
         return self.generateTradeSignalsMa(*args, **kwargs)
 
+    def generateSignalSteps(self, signals):
+        """AL/SAT/FLAT sinyal listesinden pozisyon state'i tasiyan step listesi uretir.
+
+        AL -> 1, SAT -> -1, FLAT -> 0. Sinyal olmayan barlarda son state korunur.
+        """
+        state = 0
+        steps = []
+        for signal in signals or []:
+            if signal == "AL":
+                state = 1
+            elif signal == "SAT":
+                state = -1
+            elif signal == "FLAT":
+                state = 0
+            steps.append(state)
+        return steps
+
     def fillPanels(self):
         """Hesaplanan veriyi self.*Panel'lere yazar."""
         self.ohlcPanel.deleteAllData()
@@ -334,9 +354,12 @@ class App:
 
         self.movAvgPanel.deleteAllData()
         self.movAvgPanel.deleteAllLevels()
-        for emaId, name, ys in self.emas:
-            self.movAvgPanel.addData(emaId, name, "line", self.xs, ys,
-                                     timestamps=self.ts, intraday=self.intraday)
+        # Eski MovAvg panel cizimi:
+        # for emaId, name, ys in self.emas:
+        #     self.movAvgPanel.addData(emaId, name, "line", self.xs, ys,
+        #                              timestamps=self.ts, intraday=self.intraday)
+        self.movAvgPanel.addData(1, "Signal Step", "line", self.xs, self.signalSteps,
+                                 timestamps=self.ts, intraday=self.intraday)
 
         self.macdPanel.deleteAllData()
         self.macdPanel.deleteAllLevels()
