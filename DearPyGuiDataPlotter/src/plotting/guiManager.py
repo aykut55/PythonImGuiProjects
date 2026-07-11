@@ -120,6 +120,7 @@ class GuiManager:
         self._deferredCallbacks = []  # [{"frames": int, "callback": callable}]
         self._topViewModeValues = {}  # {mode: {field: value}} - bkz. seedTopViewRangeInputs/_saveTopViewModeValues
         self._lastTopViewMode = "FitToScreen (Ultra)"  # _onTopViewModeChanged'in "cikilan mod" takibi - combo'nun gorsel varsayilaniyla (topViewModes[2]) AYNI olmali
+        self._zoomStates = {}  # {panelId: {"x0": (...), "y0": (...), "xCount": int, "yCount": int}}
         self.isDarkTheme = True
         self.lightTheme = self._buildLightTheme()
         self.panelTheme = self._buildPanelTheme()
@@ -466,6 +467,114 @@ class GuiManager:
         self.rangeSliderBar.syncScrollToView(panelId)
         self._updateViewStatusText(panelId, result)
 
+    def _onZoomInX(self, sender=None, appData=None):
+        self._doZoom("x", "in")
+
+    def _onZoomOutX(self, sender=None, appData=None):
+        self._doZoom("x", "out")
+
+    def _onZoomInY(self, sender=None, appData=None):
+        self._doZoom("y", "in")
+
+    def _onZoomOutY(self, sender=None, appData=None):
+        self._doZoom("y", "out")
+
+    def _onZoomInXY(self, sender=None, appData=None):
+        self._doZoom("xy", "in")
+
+    def _onZoomOutXY(self, sender=None, appData=None):
+        self._doZoom("xy", "out")
+
+    def _onResetZoomX(self, sender=None, appData=None):
+        self._resetZoom("x")
+
+    def _onResetZoomY(self, sender=None, appData=None):
+        self._resetZoom("y")
+
+    def _onResetZoomXY(self, sender=None, appData=None):
+        self._resetZoom("xy")
+
+    def _doZoom(self, axes, direction):
+        panelId = self.panelManager.getActivePanelId()
+        self._ensureZoomState(panelId)
+        ratio = self._getTopZoomRatio()
+        result = self.panelManager.zoomPanel(panelId, axes=axes, direction=direction, ratio=ratio)
+        if result is None:
+            self._setStatusText("Zoom: no active panel")
+            return
+        self._incrementZoomCounters(panelId, axes, direction)
+        self._updateZoomStatusLabel(panelId)
+        if "x" in result:
+            self.rangeSliderBar.syncScrollToView(panelId)
+            self._updateViewStatusText(panelId, result["x"])
+        else:
+            self._setStatusText(f"Zoom {axes.upper()} {direction}: panel {panelId}")
+
+    def _resetZoom(self, axes):
+        panelId = self.panelManager.getActivePanelId()
+        state = self._zoomStates.get(panelId)
+        if not state:
+            self._setStatusText("Reset Zoom: no zoom baseline")
+            self._updateZoomStatusLabel(panelId)
+            return
+
+        xLimits = state.get("x0") if "x" in axes else None
+        yLimits = state.get("y0") if "y" in axes else None
+        result = self.panelManager.setPanelAxisLimits(panelId, xLimits=xLimits, yLimits=yLimits)
+        if result is None:
+            self._setStatusText("Reset Zoom: no active panel")
+            return
+
+        if "x" in axes:
+            state["xCount"] = 0
+        if "y" in axes:
+            state["yCount"] = 0
+        self._updateZoomStatusLabel(panelId)
+
+        if "x" in result:
+            self.rangeSliderBar.syncScrollToView(panelId)
+            self._updateViewStatusText(panelId, result["x"])
+        else:
+            self._setStatusText(f"Reset Zoom {axes.upper()}: panel {panelId}")
+
+    def _ensureZoomState(self, panelId):
+        if panelId in self._zoomStates:
+            return self._zoomStates[panelId]
+        self._zoomStates[panelId] = {
+            "x0": self.panelManager.getXAxisLimits(panelId),
+            "y0": self.panelManager.getYAxisLimits(panelId),
+            "xCount": 0,
+            "yCount": 0,
+        }
+        return self._zoomStates[panelId]
+
+    def _incrementZoomCounters(self, panelId, axes, direction):
+        state = self._ensureZoomState(panelId)
+        delta = 1 if direction == "in" else -1
+        if "x" in axes:
+            state["xCount"] += delta
+        if "y" in axes:
+            state["yCount"] += delta
+
+    def _updateZoomStatusLabel(self, panelId=None):
+        if not dpg.does_item_exist("top_zoom_status_text"):
+            return
+        panelId = self.panelManager.getActivePanelId() if panelId is None else panelId
+        state = self._zoomStates.get(panelId)
+        xCount = state.get("xCount", 0) if state else 0
+        yCount = state.get("yCount", 0) if state else 0
+        dpg.set_value("top_zoom_status_text", f"({xCount},{yCount})")
+
+    def _getTopZoomRatio(self):
+        try:
+            raw = dpg.get_value("top_zoom_ratio_combo")
+        except Exception:
+            raw = "30%"
+        try:
+            return float(str(raw).strip().rstrip("%")) / 100.0
+        except (TypeError, ValueError):
+            return 0.30
+
     def _updateViewStatusText(self, panelId, xLimits):
         """Bottom paneldeki status label'i "Full Data Count : N, ViewRange :
         [xxxx - yyyyy], Visible Data Count : N" formatinda gunceller - hem
@@ -571,6 +680,7 @@ class GuiManager:
         if dpg.does_item_exist("active_panel_plot_combo"):
             dpg.configure_item("active_panel_plot_combo", items=labels)
             dpg.set_value("active_panel_plot_combo", activeLabel)
+        self._updateZoomStatusLabel(activeId)
 
     def buildLayout(self, layoutId=0):
         self.destroyLayout()
@@ -696,6 +806,35 @@ class GuiManager:
                                        callback=self._onAdjustAllAxes)
                     dpg.add_text("", tag="top_visible_window_text")
 
+                with dpg.child_window(tag="topPanelGroupBox5", width=330, height=-1, border=True):
+                    with dpg.group(horizontal=True):
+                        dpg.add_text("Zoom Controls")
+                        dpg.add_combo(tag="top_zoom_ratio_combo",
+                                     items=["10%", "20%", "30%", "50%", "100%"],
+                                     default_value="30%", width=90)
+                        dpg.add_text("(0,0)", tag="top_zoom_status_text")
+                    with dpg.group(horizontal=True):
+                        dpg.add_button(label="Zoom In X", width=95,
+                                       callback=self._onZoomInX)
+                        dpg.add_button(label="Zoom In Y", width=95,
+                                       callback=self._onZoomInY)
+                        dpg.add_button(label="Zoom In XY", width=95,
+                                       callback=self._onZoomInXY)
+                    with dpg.group(horizontal=True):
+                        dpg.add_button(label="Zoom Out X", width=95,
+                                       callback=self._onZoomOutX)
+                        dpg.add_button(label="Zoom Out Y", width=95,
+                                       callback=self._onZoomOutY)
+                        dpg.add_button(label="Zoom Out XY", width=95,
+                                       callback=self._onZoomOutXY)
+                    with dpg.group(horizontal=True):
+                        dpg.add_button(label="Reset X", width=95,
+                                       callback=self._onResetZoomX)
+                        dpg.add_button(label="Reset Y", width=95,
+                                       callback=self._onResetZoomY)
+                        dpg.add_button(label="Reset XY", width=95,
+                                       callback=self._onResetZoomXY)
+
                 with dpg.child_window(tag="topPanelGroupBox4", width=300, height=-1, border=True):
                     # RangeSliderBar'in (centerTopPanel'e gomulu) iki bagimsiz
                     # gorunurluk bayragini (bkz. rangeSliderBar.py setSliderVisible/
@@ -753,6 +892,7 @@ class GuiManager:
         dpg.bind_item_theme("topPanelGroupBox2", self._buildCompactControlTheme())
         dpg.bind_item_theme("topPanelGroupBox3", self._buildCompactControlTheme())
         dpg.bind_item_theme("topPanelGroupBox4", self._buildCompactControlTheme())
+        dpg.bind_item_theme("topPanelGroupBox5", self._buildCompactControlTheme())
 
         with dpg.child_window(tag="centerPanel", parent=self.LAYOUT_ROOT,
                               **geometry["centerPanel"]):

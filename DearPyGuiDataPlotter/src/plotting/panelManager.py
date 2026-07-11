@@ -559,6 +559,115 @@ class PanelManager:
         dpg.set_axis_limits_auto(xTag)
         return newMin, newMax
 
+    def zoomPanel(self, panelId=None, axes="x", direction="in", ratio=0.30):
+        """Verilen/aktif panelin gorunur eksen limitlerini merkezden zoom'lar.
+
+        axes: 'x' | 'y' | 'xy'
+        direction: 'in' | 'out'
+        ratio: 0.20 -> %20, 0.30 -> %30 gibi dusunulur.
+        Basarili olursa {"x": (min, max), "y": (min, max)} seklinde doner.
+        """
+        panelId = self.getActivePanelId() if panelId is None else panelId
+        panel = self._panels.get(panelId)
+        if panel is None:
+            return None
+
+        axes = (axes or "x").lower()
+        direction = (direction or "in").lower()
+        try:
+            ratio = float(ratio)
+        except (TypeError, ValueError):
+            ratio = 0.30
+        ratio = max(0.01, min(5.0, ratio))
+
+        scale = 1.0 / (1.0 + ratio) if direction == "in" else (1.0 + ratio)
+        result = {}
+
+        if "x" in axes:
+            xResult = self._zoomAxisLimits(f"x_axis_{panelId}", scale,
+                                           clampRange=self._fullXRangeForPanel(panel))
+            if xResult is not None:
+                result["x"] = xResult
+
+        if "y" in axes:
+            yResult = self._zoomAxisLimits(f"y_axis_{panelId}", scale)
+            if yResult is not None:
+                result["y"] = yResult
+
+        if not result:
+            return None
+
+        dpg.split_frame()
+        if "x" in result:
+            dpg.set_axis_limits_auto(f"x_axis_{panelId}")
+        if "y" in result:
+            dpg.set_axis_limits_auto(f"y_axis_{panelId}")
+        return result
+
+    def _zoomAxisLimits(self, axisTag, scale, clampRange=None):
+        if not dpg.does_item_exist(axisTag):
+            return None
+        limits = self._axisLimits(axisTag)
+        if limits is None:
+            return None
+        axisMin, axisMax = limits
+        span = axisMax - axisMin
+        if span <= 0:
+            return None
+
+        center = (axisMin + axisMax) / 2.0
+        newSpan = max(span * scale, 1e-9)
+        newMin = center - newSpan / 2.0
+        newMax = center + newSpan / 2.0
+
+        if clampRange is not None:
+            dataMin, dataMax = clampRange
+            dataSpan = dataMax - dataMin
+            if dataSpan > 0:
+                if newSpan >= dataSpan:
+                    newMin, newMax = dataMin, dataMax
+                elif newMin < dataMin:
+                    newMin, newMax = dataMin, dataMin + newSpan
+                elif newMax > dataMax:
+                    newMin, newMax = dataMax - newSpan, dataMax
+
+        dpg.set_axis_limits(axisTag, newMin, newMax)
+        return newMin, newMax
+
+    def setPanelAxisLimits(self, panelId=None, xLimits=None, yLimits=None):
+        """Verilen/aktif panelin X/Y eksen limitlerini dogrudan uygular.
+
+        Zoom reset gibi kontrollu geri-donuslerde kullanilir. Basarili eksenler
+        icin {"x": (...), "y": (...)} dondurur.
+        """
+        panelId = self.getActivePanelId() if panelId is None else panelId
+        panel = self._panels.get(panelId)
+        if panel is None:
+            return None
+
+        result = {}
+        if xLimits is not None:
+            xTag = f"x_axis_{panelId}"
+            if dpg.does_item_exist(xTag):
+                dpg.set_axis_limits(xTag, xLimits[0], xLimits[1])
+                result["x"] = (xLimits[0], xLimits[1])
+
+        if yLimits is not None:
+            yTag = f"y_axis_{panelId}"
+            if dpg.does_item_exist(yTag):
+                dpg.set_axis_limits(yTag, yLimits[0], yLimits[1])
+                result["y"] = (yLimits[0], yLimits[1])
+
+        if not result:
+            return None
+
+        dpg.split_frame()
+        if "x" in result:
+            dpg.set_axis_limits_auto(f"x_axis_{panelId}")
+        if "y" in result:
+            dpg.set_axis_limits_auto(f"y_axis_{panelId}")
+        return result
+
     def panToFraction(self, panelId=None, fraction=0.0, liveOnly=False):
         """RangeSliderBar'in scroll bar'i suruklenince cagrilir - syncScrollToView'in
         TERSI: GORUNUR genisligi (span) koruyarak penceresini 0..1 arasindaki
@@ -1590,6 +1699,11 @@ class PanelManager:
         Apply Params akisini bozmayan yan-etkisiz bir okuma)."""
         panelId = self.getActivePanelId() if panelId is None else panelId
         return self._axisLimits(f"x_axis_{panelId}")
+
+    def getYAxisLimits(self, panelId=None):
+        """Verilen/aktif panelin y eksenindeki GUNCEL limitlerini dondurur."""
+        panelId = self.getActivePanelId() if panelId is None else panelId
+        return self._axisLimits(f"y_axis_{panelId}")
 
     def getPanelDataCount(self, panelId=None):
         """Verilen/aktif panelin GORUNUR serilerindeki EN BUYUK dataCount'u
