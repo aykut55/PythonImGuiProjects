@@ -97,6 +97,10 @@ class App:
         if prepared is None:
             return
         self.data = prepared
+        gm.currentPreparedData = self.data
+        gm.currentView = self.view
+        gm.currentBundlePath = self.bundlePath
+        gm.currentViewPath = self.viewPath
 
         # Panel ve Plotların guide cizdirilmesi...
         # 6) Bos plot kabuklarini ciz. Bu UI'nin once iskeleti gostermesini saglar.

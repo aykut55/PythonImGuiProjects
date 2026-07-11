@@ -32,6 +32,8 @@ class ScriptPanel:
         self._on_close_cb = None
         self._on_run_complete = None
         self._on_open_console = None
+        self._next_external_window_id = 1
+        self._external_windows = {}
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self._scripts_dir = os.path.join(root, "scripts")
         self._current_path = os.path.join(self._scripts_dir, "default.py")
@@ -83,16 +85,20 @@ class ScriptPanel:
                         width=width, height=height, show=self._visible,
                         on_close=self._on_close):
             with dpg.group(horizontal=True):
+                dpg.add_text("File:")
+                dpg.add_text(os.path.basename(self._current_path), tag=self.FILE_LABEL)
+            with dpg.group(horizontal=True):
                 dpg.add_button(label="Run", callback=self._run)
                 dpg.add_button(label="Open", callback=lambda: dpg.show_item(self.OPEN_DIALOG))
                 dpg.add_button(label="Reopen", callback=self._reopen)
                 dpg.add_button(label="Save", callback=self._save)
                 dpg.add_button(label="Save As", callback=lambda: dpg.show_item(self.SAVEAS_DIALOG))
-                dpg.add_button(label="New", callback=self._new)
                 dpg.add_button(label="Console",
                                callback=lambda: self._on_open_console and self._on_open_console())
-                dpg.add_text("File:")
-                dpg.add_text(os.path.basename(self._current_path), tag=self.FILE_LABEL)
+                dpg.add_button(label="Clear", callback=self._new)
+                dpg.add_button(label="Copy", callback=self._copy)
+                dpg.add_button(label="New Script Window",
+                               callback=self._open_external_script_window)
             dpg.add_input_text(tag=self.CODE, multiline=True, width=-1, height=-1,
                                default_value=initial, tab_input=True)
 
@@ -130,6 +136,206 @@ class ScriptPanel:
             except Exception:
                 print(traceback.format_exc())
 
+    def _run_script_file(self, fileName):
+        path = os.path.join(self._scripts_dir, fileName)
+        try:
+            code = self._read_file(path)
+            exec(compile(code, path, "exec"), self._namespace)
+        except Exception:
+            print(traceback.format_exc())
+        if self._on_run_complete:
+            try:
+                self._on_run_complete()
+            except Exception:
+                print(traceback.format_exc())
+
+    def _open_external_script_window(self):
+        windowId = self._next_external_window_id
+        self._next_external_window_id += 1
+
+        path = os.path.join(self._scripts_dir, "external_window.py")
+        windowTag = f"external_script_window_{windowId}"
+        codeTag = f"external_script_code_{windowId}"
+        fileLabelTag = f"external_script_file_label_{windowId}"
+        statusTag = f"external_script_status_{windowId}"
+        openDialogTag = f"external_script_open_dialog_{windowId}"
+        saveAsDialogTag = f"external_script_saveas_dialog_{windowId}"
+
+        self._external_windows[windowId] = {
+            "path": path,
+            "windowTag": windowTag,
+            "codeTag": codeTag,
+            "fileLabelTag": fileLabelTag,
+            "statusTag": statusTag,
+            "openDialogTag": openDialogTag,
+            "saveAsDialogTag": saveAsDialogTag,
+        }
+
+        with dpg.window(label=f"External Script Window {windowId}",
+                        tag=windowTag, width=720, height=520):
+            with dpg.group(horizontal=True):
+                dpg.add_text("File:")
+                dpg.add_text(os.path.basename(path), tag=fileLabelTag)
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Run",
+                               callback=self._on_external_run_clicked,
+                               user_data=windowId)
+                dpg.add_button(label="Open",
+                               callback=self._on_external_open_clicked,
+                               user_data=openDialogTag)
+                dpg.add_button(label="Reopen",
+                               callback=self._on_external_reopen_clicked,
+                               user_data=windowId)
+                dpg.add_button(label="Save",
+                               callback=self._on_external_save_clicked,
+                               user_data=windowId)
+                dpg.add_button(label="Save As",
+                               callback=self._on_external_saveas_clicked,
+                               user_data=saveAsDialogTag)
+                dpg.add_button(label="Clear",
+                               callback=self._on_external_clear_clicked,
+                               user_data=windowId)
+                dpg.add_button(label="Copy",
+                               callback=self._on_external_copy_clicked,
+                               user_data=windowId)
+            dpg.add_text("Waiting...", tag=statusTag)
+            dpg.add_input_text(tag=codeTag, multiline=True, width=-1, height=-1,
+                               default_value=self._read_file(path), tab_input=True)
+
+        with dpg.file_dialog(tag=openDialogTag, show=False, directory_selector=False,
+                             width=600, height=400, default_path=self._scripts_dir,
+                             callback=lambda sender, app_data, user_data=windowId:
+                             self._on_external_open_selected(user_data, app_data)):
+            dpg.add_file_extension(".py")
+            dpg.add_file_extension(".*")
+
+        with dpg.file_dialog(tag=saveAsDialogTag, show=False, directory_selector=False,
+                             width=600, height=400, default_path=self._scripts_dir,
+                             callback=lambda sender, app_data, user_data=windowId:
+                             self._on_external_saveas_selected(user_data, app_data)):
+            dpg.add_file_extension(".py")
+            dpg.add_file_extension(".*")
+
+    def _on_external_run_clicked(self, sender=None, app_data=None, user_data=None):
+        self._run_external_window(user_data)
+
+    def _on_external_open_clicked(self, sender=None, app_data=None, user_data=None):
+        if user_data:
+            dpg.show_item(user_data)
+
+    def _on_external_reopen_clicked(self, sender=None, app_data=None, user_data=None):
+        self._reopen_external_window(user_data)
+
+    def _on_external_save_clicked(self, sender=None, app_data=None, user_data=None):
+        self._save_external_window(user_data)
+
+    def _on_external_saveas_clicked(self, sender=None, app_data=None, user_data=None):
+        if user_data:
+            dpg.show_item(user_data)
+
+    def _on_external_clear_clicked(self, sender=None, app_data=None, user_data=None):
+        state = self._external_windows.get(user_data)
+        if state and dpg.does_item_exist(state["codeTag"]):
+            dpg.set_value(state["codeTag"], "")
+
+    def _on_external_copy_clicked(self, sender=None, app_data=None, user_data=None):
+        state = self._external_windows.get(user_data)
+        if not state or not dpg.does_item_exist(state["codeTag"]):
+            return
+        try:
+            dpg.set_clipboard_text(dpg.get_value(state["codeTag"]))
+            if dpg.does_item_exist(state["statusTag"]):
+                dpg.set_value(state["statusTag"], "Copied")
+        except Exception:
+            print(traceback.format_exc())
+
+    def _run_external_window(self, windowId):
+        state = self._external_windows.get(windowId)
+        if not state or not dpg.does_item_exist(state["codeTag"]):
+            print(f"External Script Window Run: gecersiz windowId={windowId}")
+            return
+        code = dpg.get_value(state["codeTag"])
+        path = state["path"]
+        if dpg.does_item_exist(state["statusTag"]):
+            dpg.set_value(state["statusTag"], "Running...")
+        print(f"External Script Window Run: {path}")
+        try:
+            exec(compile(code, path, "exec"), self._namespace)
+            result = self._namespace.get("EXTERNAL_WINDOW_RESULT")
+            if dpg.does_item_exist(state["statusTag"]):
+                dpg.set_value(state["statusTag"], str(result or "Run completed"))
+        except Exception:
+            text = traceback.format_exc()
+            print(text)
+            if dpg.does_item_exist(state["statusTag"]):
+                dpg.set_value(state["statusTag"], "Run error, see console")
+        if self._on_run_complete:
+            try:
+                self._on_run_complete()
+            except Exception:
+                print(traceback.format_exc())
+
+    def _on_external_saveas_selected(self, windowId, app_data):
+        state = self._external_windows.get(windowId)
+        if not state:
+            return
+        path = app_data.get("file_path_name")
+        if not path:
+            return
+        if not os.path.splitext(path)[1]:
+            path += ".py"
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(dpg.get_value(state["codeTag"]))
+            state["path"] = path
+            if dpg.does_item_exist(state["fileLabelTag"]):
+                dpg.set_value(state["fileLabelTag"], os.path.basename(path))
+            print(f"Kaydedildi: {path}")
+        except Exception:
+            print(traceback.format_exc())
+
+    def _on_external_open_selected(self, windowId, app_data):
+        state = self._external_windows.get(windowId)
+        if not state:
+            return
+        path = app_data.get("file_path_name")
+        if not path:
+            return
+        self._load_external_window_path(windowId, path)
+
+    def _load_external_window_path(self, windowId, path):
+        state = self._external_windows.get(windowId)
+        if not state:
+            return
+        state["path"] = path
+        if dpg.does_item_exist(state["codeTag"]):
+            dpg.set_value(state["codeTag"], self._read_file(path))
+        if dpg.does_item_exist(state["fileLabelTag"]):
+            dpg.set_value(state["fileLabelTag"], os.path.basename(path))
+        if dpg.does_item_exist(state["statusTag"]):
+            dpg.set_value(state["statusTag"], f"Loaded: {os.path.basename(path)}")
+
+    def _reopen_external_window(self, windowId):
+        state = self._external_windows.get(windowId)
+        if not state:
+            return
+        self._load_external_window_path(windowId, state["path"])
+
+    def _save_external_window(self, windowId):
+        state = self._external_windows.get(windowId)
+        if not state or not dpg.does_item_exist(state["codeTag"]):
+            return
+        try:
+            os.makedirs(os.path.dirname(state["path"]), exist_ok=True)
+            with open(state["path"], "w", encoding="utf-8") as f:
+                f.write(dpg.get_value(state["codeTag"]))
+            if dpg.does_item_exist(state["statusTag"]):
+                dpg.set_value(state["statusTag"], f"Saved: {os.path.basename(state['path'])}")
+            print(f"Kaydedildi: {state['path']}")
+        except Exception:
+            print(traceback.format_exc())
+
     def _reopen(self):
         # Reload the active file from disk (e.g. after editing it externally).
         self._load_path(self._current_path)
@@ -143,6 +349,15 @@ class ScriptPanel:
         yapistirilan kod da halihazirda calisan uygulamaya karsi calisir."""
         if dpg.does_item_exist(self.CODE):
             dpg.set_value(self.CODE, "")
+
+    def _copy(self):
+        if not dpg.does_item_exist(self.CODE):
+            return
+        try:
+            dpg.set_clipboard_text(dpg.get_value(self.CODE))
+            print("Script editor icerigi clipboard'a kopyalandi.")
+        except Exception:
+            print(traceback.format_exc())
 
     def _save(self):
         self._save_to(self._current_path)

@@ -1132,6 +1132,9 @@ class PanelManager:
     def getXAxisMode(self):
         return self._xAxisMode
 
+    def getXAxisDateTimeFormat(self):
+        return self._dateTimeFormat
+
     def updateXAxisTicks(self, panelId=None):
         """x_axis_{id} tick etiketlerini guncel moda (bkz. setXAxisMode) gore
         yeniden kurar. panelId verilmezse TUM cizili panelleri gunceller.
@@ -1574,6 +1577,9 @@ class PanelManager:
 
     def getCrossHairPersist(self):
         return self._crossHairPersist
+
+    def getCrossHairLastPos(self):
+        return self._crossHairLastPos
 
     def updateCrossHairOverlays(self):
         """Crosshair'i _crossHairMode/_crossHairPersist bayraklarina gore

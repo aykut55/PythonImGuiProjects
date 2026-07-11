@@ -416,6 +416,10 @@ class FullPipelineTemplate:
     def stage3DrawDirectFromMemory(self):
         data = self.buildPreparedDataInMemory()
         view = self.buildViewDescription()
+        gm.currentPreparedData = data
+        gm.currentView = view
+        gm.currentBundlePath = None
+        gm.currentViewPath = None
 
         self._resetUi()
         self.stage3BuildPanelsFromView(view)

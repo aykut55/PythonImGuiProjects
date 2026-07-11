@@ -4,6 +4,7 @@ import dearpygui.dearpygui as dpg
 
 from .consolePanel import ConsolePanel
 from .dataManager import DataManager
+from .externalIndicatorWindowManager import ExternalIndicatorWindowManager
 from .interactionManager import InteractionManager
 from .leftMenuPanel import LeftMenuPanel
 from .menuBar import MenuBar
@@ -97,6 +98,7 @@ class GuiManager:
         # (bkz. rangeSliderBar.py) - pan/zoom'a baglanmadi.
         self.rangeSliderBar = RangeSliderBar()
         self.rangeSliderBar.setPanelManager(self.panelManager)
+        self.externalIndicatorWindowManager = ExternalIndicatorWindowManager(self.panelManager)
         self.tradeSignalRenderer = TradeSignalRenderer(self.panelManager)
         self.scriptPanel.set_globals(gm=self, pm=self.panelManager, pool=self.poolDataManager,
                                      Panel=Panel, PanelData=PanelData,
@@ -197,6 +199,7 @@ class GuiManager:
             return
         self.rangeSliderBar.render()
         self.panelManager.render()
+        self.externalIndicatorWindowManager.render()
         self.leftMenuPanel.render()
         self.panelManagerWindow.render()
         self._refreshActivePanelCombo()
