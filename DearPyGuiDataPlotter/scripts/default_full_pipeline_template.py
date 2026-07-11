@@ -322,7 +322,7 @@ class FullPipelineTemplate:
                     "id": "ohlc",
                     "name": "OHLC",
                     "caption": f"{symbol} OHLC",
-                    "height": 420,
+                    "height": 400,
                     "ySyncId": 0,
                     "series": [
                         {"source": "ohlc", "name": "OHLC", "dataId": 0},
@@ -341,7 +341,7 @@ class FullPipelineTemplate:
                     "id": "signals",
                     "name": "Signals",
                     "caption": "Signal Step",
-                    "height": 160,
+                    "height": 300,
                     "ySyncMode": "fixedRange",
                     "fixedRange": [-1, 1],
                     "series": [{"source": "signalSteps", "name": "Signal Step", "dataId": 1}],
@@ -350,7 +350,7 @@ class FullPipelineTemplate:
                     "id": "indicators",
                     "name": "MACD",
                     "caption": "MACD",
-                    "height": 260,
+                    "height": 200,
                     "ySyncId": 1,
                     "series": [
                         {"source": "indicator", "name": "MACD", "dataId": 1},
