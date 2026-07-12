@@ -48,9 +48,34 @@ class GuiManager:
         "Range": ("n", "n2"),
     }
     TOP_VIEW_FIELD_TAGS = {"n": "top_view_n_input", "n2": "top_view_n2_input"}
+    TOP_PANEL_DEFAULTS = {
+        "activeUpdateMode": "Click",
+        "viewRange": {
+            "mode": "FitToScreen (Ultra)",
+            "n": 0,
+            "n2": 0,
+            "fitToScreenBarWidth": {
+                "normal": 4.0,
+                "wide": 2.5,
+                "ultra": 1.5,
+            },
+        },
+        "panMode": "VisibleScreenWidth",
+        "panStep": 100,
+        "zoomRatio": "30%",
+        "showSliderRange": True,
+        "crossHairMode": "All",
+        "showScrollBar": True,
+        "showInfoPanels": True,
+        "autoSyncX": True,
+        "showBarNumbers": False,
+        "autoSyncY": False,
+        "showOhlc": True,
+    }
 
     def __init__(self, configManager):
         self.configManager = configManager
+        self.topPanelConfig = self._loadTopPanelConfig()
         self.menuBar = MenuBar()
         self.scriptPanel = ScriptPanel()
         self.dataManager = DataManager()
@@ -107,7 +132,7 @@ class GuiManager:
                                      TradeSignalRenderer=TradeSignalRenderer,
                                      tsr=self.tradeSignalRenderer)
         self._renderLoopStarted = False
-        self._autoSyncXEnabled = True  # bkz. _onAutoSyncXChanged - GUI'deki
+        self._autoSyncXEnabled = bool(self.topPanelConfig["autoSyncX"])  # bkz. _onAutoSyncXChanged - GUI'deki
         # "top_auto_sync_x_checkbox"un default_value'su ile EL ILE senkron
         # tutulmali (DPG default_value callback'i tetiklemiyor).
         self._lastAutoSyncXTime = 0.0  # throttle icin (bkz. render())
@@ -116,12 +141,12 @@ class GuiManager:
         # panelManager.py) - bunu HER frame (60/sn) cagirmak agir/kekeme
         # olurdu, bu yuzden zaman bazli throttle var (Manuel "Adjust X Axes
         # All"/"Adjust Y Axis (all)" dugmelerine periyodik basmanin AYNISI).
-        self._autoSyncYEnabled = False  # bkz. _onAutoSyncYChanged
+        self._autoSyncYEnabled = bool(self.topPanelConfig["autoSyncY"])  # bkz. _onAutoSyncYChanged
         self._lastAutoSyncYTime = 0.0  # throttle icin (bkz. render()) - Auto
         # Sync X ile AYNI sebep/deger (_autoSyncXIntervalSec'i PAYLASIR).
         self._deferredCallbacks = []  # [{"frames": int, "callback": callable}]
         self._topViewModeValues = {}  # {mode: {field: value}} - bkz. seedTopViewRangeInputs/_saveTopViewModeValues
-        self._lastTopViewMode = "FitToScreen (Ultra)"  # _onTopViewModeChanged'in "cikilan mod" takibi - combo'nun gorsel varsayilaniyla (topViewModes[2]) AYNI olmali
+        self._lastTopViewMode = self.topPanelConfig["viewRange"]["mode"]  # _onTopViewModeChanged'in "cikilan mod" takibi - combo'nun gorsel varsayilaniyla AYNI olmali
         self._zoomStates = {}  # {panelId: {"x0": (...), "y0": (...), "xCount": int, "yCount": int}}
         self.isDarkTheme = True
         self.lightTheme = self._buildLightTheme()
@@ -150,6 +175,38 @@ class GuiManager:
             ("Toggle Data Manager", self.toggleDataManager),
         ]
 
+    def _loadTopPanelConfig(self):
+        """config/topPanel eksikse mevcut hardcoded default davranisi korur."""
+        raw = self.configManager.get("topPanel") or {}
+        cfg = dict(self.TOP_PANEL_DEFAULTS)
+        if isinstance(raw, dict):
+            cfg.update(raw)
+            viewRange = dict(self.TOP_PANEL_DEFAULTS["viewRange"])
+            if isinstance(raw.get("viewRange"), dict):
+                viewRange.update(raw["viewRange"])
+            else:
+                # Eski config formati icin geriye uyumluluk.
+                viewRange["mode"] = raw.get("viewMode", viewRange["mode"])
+                viewRange["n"] = raw.get("viewN", viewRange["n"])
+                viewRange["n2"] = raw.get("viewN2", viewRange["n2"])
+                if isinstance(raw.get("fitToScreenBarWidth"), dict):
+                    viewRange["fitToScreenBarWidth"] = raw["fitToScreenBarWidth"]
+            fitDefaults = self.TOP_PANEL_DEFAULTS["viewRange"]["fitToScreenBarWidth"]
+            fitRaw = viewRange.get("fitToScreenBarWidth")
+            fit = dict(fitDefaults)
+            if isinstance(fitRaw, dict):
+                fit.update(fitRaw)
+            viewRange["fitToScreenBarWidth"] = fit
+            cfg["viewRange"] = viewRange
+        return cfg
+
+    def _applyDebugConfig(self):
+        debug = self.configManager.get("debug") or {}
+        self.interactionManager.setEventLoggingEnabled(
+            bool(debug.get("interactionEvents", False)))
+        self.interactionManager.setPrintFormatted(
+            bool(debug.get("interactionEventsFormatted", False)))
+
     def build(self):
         with dpg.window(label="Ana Pencere", tag="main_window"):
             self.menuBar.build()
@@ -157,10 +214,13 @@ class GuiManager:
         dpg.set_primary_window("main_window", True)
         dpg.bind_item_theme("main_window", self._buildMenuBarHeightTheme())
 
+        self._applyConfiguredPanelVisibility()
+
         c = self._panelInitialCoords("consolePanel")
         self.consolePanel.build(c["x"], c["y"], c["width"], c["height"])
 
         self.buildLayout()
+        self._applyDebugConfig()
         self._startRenderLoop()
 
     def _startRenderLoop(self):
@@ -296,6 +356,29 @@ class GuiManager:
 
     def _onActiveUpdateModeChanged(self, sender=None, appData=None):
         self.panelManager.setActiveUpdateMode((appData or "hover").lower())
+
+    def _applyTopPanelInitialState(self):
+        """DPG default_value callback tetiklemedigi icin topPanel config'ini
+        ilgili manager state'lerine build sonrasinda bir kez uygular."""
+        cfg = self.topPanelConfig
+        viewRange = cfg["viewRange"]
+        fit = viewRange.get("fitToScreenBarWidth") or {}
+        self.panelManager.setFitToScreenBarWidth(
+            normal=fit.get("normal", 4.0),
+            wide=fit.get("wide", 2.5),
+            ultra=fit.get("ultra", 1.5),
+        )
+        self._onActiveUpdateModeChanged(appData=cfg["activeUpdateMode"])
+        self._onTopViewModeChanged(appData=viewRange["mode"])
+        self._onTopPanModeChanged(appData=cfg["panMode"])
+        self._onShowSliderRangeChanged(appData=cfg["showSliderRange"])
+        self._onShowScrollBarChanged(appData=cfg["showScrollBar"])
+        self._onShowInfoPanelChanged(appData=cfg["showInfoPanels"])
+        self._onShowBarNumbersChanged(appData=cfg["showBarNumbers"])
+        self._onCrossHairModeChanged(appData=cfg["crossHairMode"])
+        self._onAutoSyncXChanged(appData=cfg["autoSyncX"])
+        self._onAutoSyncYChanged(appData=cfg["autoSyncY"])
+        self._onShowOhlcChanged(appData=cfg["showOhlc"])
 
     def _onTopViewModeChanged(self, sender=None, appData=None):
         """SADECE gorsel: secili moda gore N/N2 input'larini gosterir/gizler
@@ -703,6 +786,8 @@ class GuiManager:
 
     def _buildLayoutDefault(self):
         geometry = self._computeGeometry()
+        topCfg = self.topPanelConfig
+        viewRangeCfg = topCfg["viewRange"]
 
         with dpg.child_window(tag="topPanel", parent=self.LAYOUT_ROOT,
                               no_scrollbar=True, **geometry["topPanel"]):
@@ -716,7 +801,7 @@ class GuiManager:
                     with dpg.group(horizontal=True):
                         dpg.add_text("Active Panel")
                         dpg.add_combo(tag="active_update_mode_combo", items=["Hover", "Click"],
-                                     default_value="Click", width=90,
+                                     default_value=topCfg["activeUpdateMode"], width=90,
                                      callback=self._onActiveUpdateModeChanged)
                         # callback YOK: bu combo SADECE gosterge - itemlari/
                         # secili degeri her frame _refreshActivePanelCombo()
@@ -742,15 +827,15 @@ class GuiManager:
                                        "FitToScreen (Ultra)", "Full Data", "Last N Data",
                                        "First N Data", "Range"]
                         dpg.add_combo(tag="top_view_mode_combo", items=topViewModes,
-                                     default_value=topViewModes[2], width=150,
+                                     default_value=viewRangeCfg["mode"], width=150,
                                      callback=self._onTopViewModeChanged)
                         dpg.add_button(label="Apply", width=60,
                                        callback=self._onTopViewApply)
                     with dpg.group(horizontal=True, tag="top_view_n_row", pos=(0, 0)):
                         dpg.add_input_int(tag="top_view_n_input", label="N", step=0,
-                                         default_value=0, width=70, show=False)
+                                         default_value=int(viewRangeCfg["n"]), width=70, show=False)
                         dpg.add_input_int(tag="top_view_n2_input", label="N2", step=0,
-                                         default_value=0, width=70, show=False)
+                                         default_value=int(viewRangeCfg["n2"]), width=70, show=False)
 
                 with dpg.child_window(tag="topPanelGroupBox2", width=340, height=-1, border=True):
                     # Ref3'teki drawTopPanel() 5. satiri: Pan Controls.
@@ -763,10 +848,10 @@ class GuiManager:
                         panModes = ["VisibleScreenWidth", "1 Bar", "10 Bar",
                                    "100 Bar", "1000 Bar", "UserDefined"]
                         dpg.add_combo(tag="top_pan_mode_combo", items=panModes,
-                                     default_value=panModes[0], width=150,
+                                     default_value=topCfg["panMode"], width=150,
                                      callback=self._onTopPanModeChanged)
                         dpg.add_input_int(tag="top_pan_step_input", step=0,
-                                         default_value=100, width=70, show=False)
+                                         default_value=int(topCfg["panStep"]), width=70, show=False)
                     with dpg.group(horizontal=True):
                         dpg.add_button(label="|< Basa", width=70,
                                        callback=self._onPanToStart)
@@ -814,7 +899,7 @@ class GuiManager:
                         dpg.add_text("Zoom Controls")
                         dpg.add_combo(tag="top_zoom_ratio_combo",
                                      items=["10%", "20%", "30%", "50%", "100%"],
-                                     default_value="30%", width=90)
+                                     default_value=topCfg["zoomRatio"], width=90)
                         dpg.add_text("(0,0)", tag="top_zoom_status_text")
                     with dpg.group(horizontal=True):
                         dpg.add_button(label="Zoom In X", width=95,
@@ -848,19 +933,22 @@ class GuiManager:
                     # callback'i tetiklemiyor).
                     with dpg.group(horizontal=True):
                         dpg.add_checkbox(label="Show SliderRange", tag="top_show_sliderange_checkbox",
-                                         default_value=True, callback=self._onShowSliderRangeChanged)
+                                         default_value=bool(topCfg["showSliderRange"]),
+                                         callback=self._onShowSliderRangeChanged)
                         dpg.add_text("CrossHair :", tag="top_crosshair_label")
                         dpg.add_combo(tag="top_crosshair_mode_combo", items=["Hidden", "Single", "All"],
-                                     default_value="All", width=70,
+                                     default_value=topCfg["crossHairMode"], width=70,
                                      callback=self._onCrossHairModeChanged)
                     dpg.add_checkbox(label="Show ScrollBar", tag="top_show_scrollbar_checkbox",
-                                     default_value=True, callback=self._onShowScrollBarChanged)
+                                     default_value=bool(topCfg["showScrollBar"]),
+                                     callback=self._onShowScrollBarChanged)
                     with dpg.group(horizontal=True, tag="top_infopanel_row"):
                         # panelManager.setInfoPanelMode ile ayni fikir: checked ->
                         # "always" (tum panellerde sabit gosterilir), unchecked ->
                         # "hidden" (hicbir panelde gosterilmez).
                         dpg.add_checkbox(label="Show InfoPanel(s)", tag="top_show_infopanel_checkbox",
-                                         default_value=True, callback=self._onShowInfoPanelChanged)
+                                         default_value=bool(topCfg["showInfoPanels"]),
+                                         callback=self._onShowInfoPanelChanged)
                         # Acikken "Adjust X Axes All" dugmesinin AYNI mantigini
                         # periyodik (throttle'lu, bkz. _updateAutoSyncX) kendimiz
                         # cagirir - bkz. o metodun docstring'i. default CHECKED
@@ -871,7 +959,8 @@ class GuiManager:
                         # hizalanir (bkz. _alignAutoSyncCheckboxes) - alttaki
                         # Auto Sync Y ile AYNI X'te, boylece tam UZERINDE durur.
                         dpg.add_checkbox(label="Auto Sync X", tag="top_auto_sync_x_checkbox",
-                                         default_value=True, callback=self._onAutoSyncXChanged)
+                                         default_value=bool(topCfg["autoSyncX"]),
+                                         callback=self._onAutoSyncXChanged)
                     with dpg.group(horizontal=True, tag="top_barnumbers_row"):
                         # panelManager.setXAxisMode ile ayni fikir: checked -> "bar"
                         # (ham bar numarasi - PanelManager'in ZATEN varsayilani, bkz.
@@ -880,7 +969,8 @@ class GuiManager:
                         # bu yuzden True - checkbox'in baslangic gorunumu PanelManager'in
                         # gercek baslangic modundan (bar) FARKLI olmasin diye.
                         dpg.add_checkbox(label="Show BarNumbers", tag="top_show_barnumbers_checkbox",
-                                         default_value=False, callback=self._onShowBarNumbersChanged)
+                                         default_value=bool(topCfg["showBarNumbers"]),
+                                         callback=self._onShowBarNumbersChanged)
                         # Auto Sync X'in Y-ekseni karsiligi - "Adjust Y Axis (all)"
                         # dugmesinin AYNI mantigini periyodik cagirir (bkz.
                         # _updateAutoSyncY). Konumu top_crosshair_label ile SOLDAN
@@ -888,9 +978,11 @@ class GuiManager:
                         # render()'dan cagrilir) - Auto Sync X ile AYNI X'te
                         # oldugu icin tam ALTINDA durur.
                         dpg.add_checkbox(label="Auto Sync Y", tag="top_auto_sync_y_checkbox",
-                                         default_value=False, callback=self._onAutoSyncYChanged)
+                                         default_value=bool(topCfg["autoSyncY"]),
+                                         callback=self._onAutoSyncYChanged)
                     dpg.add_checkbox(label="Show OHLC", tag="top_show_ohlc_checkbox",
-                                     default_value=True, callback=self._onShowOhlcChanged)
+                                     default_value=bool(topCfg["showOhlc"]),
+                                     callback=self._onShowOhlcChanged)
         dpg.bind_item_theme("topPanelGroupBox1", self._buildCompactControlTheme())
         dpg.bind_item_theme("topPanelGroupBox2", self._buildCompactControlTheme())
         dpg.bind_item_theme("topPanelGroupBox3", self._buildCompactControlTheme())
@@ -917,6 +1009,7 @@ class GuiManager:
         # padding temasini centerTopPanel'e baglar - boylece panelTheme'in
         # WindowPadding'i tarafindan EZILMEZ (bkz. rangeSliderBar.py).
         self.rangeSliderBar.build("centerTopPanel")
+        self._applyTopPanelInitialState()
 
         s = self._panelInitialCoords("scriptPanel")
         self.scriptPanel.build(s["x"], s["y"], s["width"], s["height"],
@@ -953,6 +1046,37 @@ class GuiManager:
     def _panelInitialCoords(self, panelName):
         panels = self.configManager.get("panels") or {}
         return panels.get(panelName, {}).get("initialCoordinates", {"x": 0, "y": 0, "width": 520, "height": 600})
+
+    def _panelInitialVisible(self, panelName, default):
+        panels = self.configManager.get("panels") or {}
+        panelCfg = panels.get(panelName, {})
+        return bool(panelCfg.get("visible", default))
+
+    def _setPanelObjectVisible(self, panelObj, visible):
+        if visible:
+            panelObj.show()
+        else:
+            panelObj.hide()
+
+    def _applyConfiguredPanelVisibility(self):
+        self._setPanelObjectVisible(
+            self.scriptPanel,
+            self._panelInitialVisible("scriptPanel", self.scriptPanel.isVisible()))
+        self._setPanelObjectVisible(
+            self.dataManager,
+            self._panelInitialVisible("dataManager", self.dataManager.isVisible()))
+        self._setPanelObjectVisible(
+            self.leftMenuPanel,
+            self._panelInitialVisible("leftMenu", self.leftMenuPanel.isVisible()))
+        self._setPanelObjectVisible(
+            self.poolPanel,
+            self._panelInitialVisible("poolPanel", self.poolPanel.isVisible()))
+        self._setPanelObjectVisible(
+            self.panelManagerWindow,
+            self._panelInitialVisible("panelManagerWindow", self.panelManagerWindow.isVisible()))
+        self._setPanelObjectVisible(
+            self.consolePanel,
+            self._panelInitialVisible("consolePanel", self.consolePanel.isVisible()))
 
     def _computeGeometry(self):
         vpW = dpg.get_viewport_width()

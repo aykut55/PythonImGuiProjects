@@ -46,9 +46,15 @@ class InteractionManager:
         self._syncVersion = 0
         self._pendingSyncTargets = {}  # panelId -> syncVersion; gorunur olunca uygulanir
         self.PRINT_FORMATTED = False  # True -> satir-sutun tablo, False -> tek satir (bkz. _printEvent)
+        self._eventLoggingEnabled = False
 
     def setPrintFormatted(self, formatted):
         self.PRINT_FORMATTED = bool(formatted)
+
+    def setEventLoggingEnabled(self, enabled):
+        self._eventLoggingEnabled = bool(enabled)
+        if not self._eventLoggingEnabled:
+            self._eventLog.clear()
 
     def setPanelManager(self, panelManager):
         """Event'in sahibini (hangi panel) PanelManager'in ZATEN var olan
@@ -175,6 +181,9 @@ class InteractionManager:
         basma toplu ve frame'in sonunda oldugu icin girdi isleme bloklanmiyor."""
         if not self._eventLog:
             return
+        if not self._eventLoggingEnabled:
+            self._eventLog.clear()
+            return
         for event in self._eventLog:
             fields = self.KEY_EVENT_PRINT_FIELDS if "keyCode" in event else self.EVENT_PRINT_FIELDS
             self._printEvent(event, fields, formatted=self.PRINT_FORMATTED)
@@ -285,7 +294,7 @@ class InteractionManager:
             "screenRect": self._getItemScreenRect(panelInfo["plotId"]),
         }
         self._lastEvent = event
-        if log:
+        if log and self._eventLoggingEnabled:
             self._eventLog.append(event)
 
     def _emitKeyEvent(self, action, keyCode):
@@ -299,7 +308,8 @@ class InteractionManager:
             "frame": dpg.get_frame_count(),
         }
         self._lastEvent = event
-        self._eventLog.append(event)
+        if self._eventLoggingEnabled:
+            self._eventLog.append(event)
 
     # Basilirken hangi alan hangi sirada gorunecek (satir-sutun hizali tablo).
     EVENT_PRINT_FIELDS = (

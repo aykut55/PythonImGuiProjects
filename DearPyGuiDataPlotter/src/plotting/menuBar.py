@@ -48,12 +48,6 @@ class MenuBar:
 
     def build(self):
         with dpg.menu_bar():
-            with dpg.menu(label="Layout"):
-                dpg.add_menu_item(label="Build",
-                                  callback=lambda: self._on_build_layout and self._on_build_layout())
-                dpg.add_menu_item(label="Destroy",
-                                  callback=lambda: self._on_destroy_layout and self._on_destroy_layout())
-
             with dpg.menu(label="File"):
                 dpg.add_menu_item(label="New")
                 dpg.add_menu_item(label="Save")

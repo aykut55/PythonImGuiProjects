@@ -8,19 +8,55 @@
     },
     "panels": {
         "scriptPanel": {
-            "initialCoordinates": {"x": 1546, "y": 147, "width": 520, "height": 551}
+            "initialCoordinates": {"x": 1546, "y": 147, "width": 520, "height": 551},
+            "visible": true
         },
         "dataManager": {
-            "initialCoordinates": {"x": 1546, "y": 147, "width": 520, "height": 819}
+            "initialCoordinates": {"x": 1546, "y": 147, "width": 520, "height": 819},
+            "visible": false
+        },
+        "leftMenu": {
+            "visible": true
         },
         "poolPanel": {
-            "initialCoordinates": {"x": 1000, "y": 147, "width": 420, "height": 600}
+            "initialCoordinates": {"x": 1000, "y": 147, "width": 420, "height": 600},
+            "visible": false
         },
         "panelManagerWindow": {
-            "initialCoordinates": {"x": 550, "y": 100, "width": 700, "height": 900}
+            "initialCoordinates": {"x": 550, "y": 100, "width": 700, "height": 900},
+            "visible": false
         },
         "consolePanel": {
-            "initialCoordinates": {"x": 1546, "y": 705, "width": 520, "height": 261}
+            "initialCoordinates": {"x": 1546, "y": 705, "width": 520, "height": 261},
+            "visible": true
         }
+    },
+    "topPanel": {
+        "activeUpdateMode": "Click",
+        "viewRange": {
+            "mode": "FitToScreen (Ultra)",
+            "n": 1000,
+            "n2": 1000,
+            "fitToScreenBarWidth": {
+                "normal": 4.0,
+                "wide": 2.5,
+                "ultra": 1.5
+            }
+        },
+        "panMode": "VisibleScreenWidth",
+        "panStep": 100,
+        "zoomRatio": "30%",
+        "showSliderRange": true,
+        "crossHairMode": "All",
+        "showScrollBar": true,
+        "showInfoPanels": true,
+        "showBarNumbers": false,
+        "showOhlc": true,
+        "autoSyncX": true,
+        "autoSyncY": false
+    },
+    "debug": {
+        "interactionEvents": false,
+        "interactionEventsFormatted": false
     }
 }

@@ -51,6 +51,7 @@ class PanelManager:
         self._defaultViewMode = "FitToScreen (Ultra)"  # guiManager'daki "top_view_mode_combo"nun gorsel varsayilaniyla AYNI olmali
         self._defaultViewN = 1000
         self._defaultViewN2 = 2000
+        self._fitToScreenBarWidth = {"normal": 4.0, "wide": 2.5, "ultra": 1.5}
         self._lastDrawnDataCount = {}  # {panelId: onceki drawPanelData'daki dataCount} - bkz. _maybeApplyDefaultViewOnLoad
         self._lodLastRange = {}  # {panelId: (xMin,xMax) en son LOD guncellemesindeki gorunur aralik} - bkz. updateLod/_lodRangeChanged
 
@@ -748,6 +749,18 @@ class PanelManager:
         if dpg.does_item_exist(xTag):
             dpg.set_axis_limits_auto(xTag)
 
+    def setFitToScreenBarWidth(self, normal=None, wide=None, ultra=None):
+        """FitToScreen modlarinin px/bar katsayilarini config'ten set eder."""
+        for key, value in (("normal", normal), ("wide", wide), ("ultra", ultra)):
+            if value is None:
+                continue
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                self._fitToScreenBarWidth[key] = parsed
+
     # ------------------------------------------------------- view/range
     def applyViewMode(self, panelId=None, mode="FitToScreen (Ultra)", n=1000, n2=2000):
         """guiManager'daki "View / Range" Apply butonunun gercek mantigi
@@ -775,11 +788,11 @@ class PanelManager:
 
         if mode.startswith("FitToScreen"):
             if "Wide" in mode:
-                barWidth = 2.5
+                barWidth = self._fitToScreenBarWidth["wide"]
             elif "Ultra" in mode:
-                barWidth = 1.5
+                barWidth = self._fitToScreenBarWidth["ultra"]
             else:
-                barWidth = 4.0
+                barWidth = self._fitToScreenBarWidth["normal"]
             plotWidth = self._plotPixelWidth(panelId)
             visible = int(plotWidth / barWidth) if barWidth > 0 else barCount
             visible = max(100, min(visible, barCount))
