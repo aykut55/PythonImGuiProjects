@@ -5,6 +5,7 @@ import numpy as np
 import dearpygui.dearpygui as dpg
 
 from .panel import Panel
+from .poolDataManager import clonePanelData
 
 
 class PanelManager:
@@ -47,6 +48,7 @@ class PanelManager:
         # "hover" kalip mouse gezintisiyle aktif panel degismeye devam ediyordu.
         self._activePanelId = None  # su an "aktif" sayilan panelin id'si (bkz. updateActivePanel/_onPlotClicked)
         self._interactionManager = None  # bkz. setInteractionManager (guiManager tarafindan baglanir)
+        self._poolDropHandler = None
         self._lastReadPlotParams = None  # Read Params (src) ile yakalanan son kaynak plot/eksen durumu
         self._defaultViewMode = "FitToScreen (Ultra)"  # guiManager'daki "top_view_mode_combo"nun gorsel varsayilaniyla AYNI olmali
         self._defaultViewN = 1000
@@ -57,6 +59,9 @@ class PanelManager:
 
     def setInteractionManager(self, interactionManager):
         self._interactionManager = interactionManager
+
+    def setPoolDropHandler(self, handler):
+        self._poolDropHandler = handler
 
     def createPanel(self, name, caption="", parent="", alignment=None):
         """Otomatik id ile YALNIZCA bir Panel olusturur, DONDURUR - panelManager'a
@@ -97,13 +102,12 @@ class PanelManager:
         return self._panels.get(key)
 
     def deletePanel(self, panelId):
-        """Bir paneli modelden siler + _panelOrder'dan cikarir (cizili
-        panel_{id} child_window'u varsa sync() bir sonraki cagrisinda
-        yetim UI olarak temizler, bkz. sync())."""
+        """Bir paneli modelden ve cizili UI'dan siler."""
         panel = self._panels.get(panelId)
         if panel is None:
             return
         panel.deleteAllData()
+        self._deletePanelUi(panelId)
         del self._panels[panelId]
         if panelId in self._panelOrder:
             self._panelOrder.remove(panelId)
@@ -125,11 +129,10 @@ class PanelManager:
             yield panel
 
     def deleteAllPanels(self):
-        """Modeldeki TUM panelleri (+ _panelOrder'i) temizler. Cizili
-        panel_{id} child_window'lari sync() bir sonraki cagrisinda yetim
-        UI olarak temizlenir."""
-        for panel in self._panels.values():
+        """Modeldeki ve cizili UI'daki TUM panelleri temizler."""
+        for panelId, panel in list(self._panels.items()):
             panel.deleteAllData()
+            self._deletePanelUi(panelId)
         if self._interactionManager is not None:
             for panelId in self._panels.keys():
                 self._interactionManager.unregisterPanel(panelId)
@@ -154,6 +157,12 @@ class PanelManager:
         # (xMin,xMax) karsilastirma yapilir - stale kalirsa ilk zoom/pan'a
         # kadar gereksiz/eksik bir LOD durumunda kalinabilirdi.
         self._lodLastRange.clear()
+
+    def _deletePanelUi(self, panelId):
+        tag = f"panel_{panelId}"
+        if dpg.does_item_exist(tag):
+            dpg.delete_item(tag)
+        self._drawnPanelIds.discard(panelId)
 
     # -------------------------------------------------------- panel sirasi
     def getPanelOrder(self):
@@ -205,6 +214,64 @@ class PanelManager:
 
     def getContainer(self):
         return self._container
+
+    def addPoolItemToPanel(self, panelId, poolItem):
+        """PoolItem.data'yi hedef panele bagimsiz PanelData clone'u olarak ekler."""
+        panel = self._panels.get(panelId)
+        if panel is None or poolItem is None or poolItem.data is None:
+            return None
+
+        dataId = self._nextDataId(panel)
+        name = self._uniqueDataName(panel, poolItem.label or poolItem.data.name)
+        data = clonePanelData(poolItem.data, dataId=dataId, name=name)
+        data.setParent(panel)
+        data.setVisible(True)
+        panel.dataList.append(data)
+
+        if dpg.does_item_exist(f"plot_{panelId}"):
+            self.drawPanelData(panelId)
+        return data
+
+    def _nextDataId(self, panel):
+        used = [int(d.id) for d in panel.dataList if isinstance(d.id, int)]
+        return (max(used) + 1) if used else 1
+
+    def _uniqueDataName(self, panel, baseName):
+        baseName = baseName or "Pool Data"
+        names = {d.name for d in panel.dataList}
+        if baseName not in names:
+            return baseName
+        index = 2
+        while f"{baseName} ({index})" in names:
+            index += 1
+        return f"{baseName} ({index})"
+
+    def _onPoolItemDroppedOnPlot(self, panelId, appData):
+        if self._poolDropHandler is None:
+            return
+        poolItemId = self._extractPoolItemId(appData)
+        if poolItemId:
+            self._poolDropHandler(panelId, poolItemId)
+
+    def _extractPoolItemId(self, appData):
+        if isinstance(appData, str):
+            return appData
+        if isinstance(appData, dict):
+            for key in ("drop_data", "drag_data", "payload", "data"):
+                value = appData.get(key)
+                if value:
+                    return value
+        if isinstance(appData, (list, tuple)) and appData:
+            for value in appData:
+                itemId = self._extractPoolItemId(value)
+                if itemId:
+                    return itemId
+        return None
+
+    def _poolDropCallback(self, panelId):
+        def callback(sender=None, appData=None, userData=None):
+            self._onPoolItemDroppedOnPlot(panelId, appData)
+        return callback
 
     def drawPanel(self, panelId):
         """Tek bir paneli (id ile) cizer - (bos) plot UI'sini kurar. Veriyi
@@ -1359,19 +1426,29 @@ class PanelManager:
 
         if self._container and dpg.does_item_exist(self._container):
             dpg.push_container_stack(self._container)
-            dpg.add_child_window(tag=tag, width=w, height=h, no_scrollbar=True)
+            dpg.add_child_window(tag=tag, width=w, height=h, no_scrollbar=True,
+                                 payload_type="pool_item",
+                                 drop_callback=self._poolDropCallback(panel.id))
             dpg.pop_container_stack()
         else:
-            dpg.add_child_window(tag=tag, width=w, height=h, no_scrollbar=True)
+            dpg.add_child_window(tag=tag, width=w, height=h, no_scrollbar=True,
+                                 payload_type="pool_item",
+                                 drop_callback=self._poolDropCallback(panel.id))
 
         # no_mouse_pos: DPG'nin sag-alt ham (x,y) okumasini gizler - onun
         # yerine hover_text_{id} (updateInfoOverlays) + mouse_pos_text_{id}
         # (updateMousePosOverlays, plotun sag-ust kosesinde sabit) kullanilir.
         plotTag = dpg.add_plot(label=panel.caption, height=-1, width=-1, parent=tag,
-                               tag=f"plot_{panel.id}", no_mouse_pos=True)
+                               tag=f"plot_{panel.id}", no_mouse_pos=True,
+                               payload_type="pool_item",
+                               drop_callback=self._poolDropCallback(panel.id))
         dpg.add_plot_legend(parent=plotTag, location=dpg.mvPlot_Location_SouthEast)
-        dpg.add_plot_axis(dpg.mvXAxis, label="", tag=f"x_axis_{panel.id}", parent=plotTag)
-        dpg.add_plot_axis(dpg.mvYAxis, label="y", tag=f"y_axis_{panel.id}", parent=plotTag)
+        dpg.add_plot_axis(dpg.mvXAxis, label="", tag=f"x_axis_{panel.id}", parent=plotTag,
+                          payload_type="pool_item",
+                          drop_callback=self._poolDropCallback(panel.id))
+        dpg.add_plot_axis(dpg.mvYAxis, label="y", tag=f"y_axis_{panel.id}", parent=plotTag,
+                          payload_type="pool_item",
+                          drop_callback=self._poolDropCallback(panel.id))
         dpg.add_text("", tag=f"hover_text_{panel.id}", parent=tag,
                     pos=(80, 40), color=(210, 210, 220, 255), show=False)
         dpg.add_text("", tag=f"mouse_pos_text_{panel.id}", parent=tag,

@@ -94,6 +94,7 @@ class GuiManager:
         self.scriptPanel.set_on_open_console(self.consolePanel.show)
         self.scriptPanel.set_on_run_complete(self.sync)
         self.panelManager = PanelManager()
+        self.panelManager.setPoolDropHandler(self._onPoolItemDroppedOnPanel)
         self.leftMenuPanel.setPanelManager(self.panelManager)
         # InteractionManager: panel/plot olusturulup PanelManager'a eklendiginde
         # register, silindiginde unregister olur (bkz. interactionManager.py).
@@ -107,6 +108,8 @@ class GuiManager:
         self.interactionManager.setPanelManager(self.panelManager)
         self.interactionManager.ensureHandlers()
         self.poolDataManager = PoolDataManager()
+        self.leftMenuPanel.setPoolDataManager(self.poolDataManager)
+        self.leftMenuPanel.setAddPoolItemCallback(self._onPoolItemDroppedOnPanel)
         # PoolPanel: DataManager gibi bagimsiz/floating bir pencere - hicbir
         # slotu isgal etmez, kullanici acip kapatana kadar ekranda kalir.
         # Symbols/Sembol/Grup dallari alt alta LeftMenuPanel'e sigmadigindan
@@ -431,6 +434,17 @@ class GuiManager:
 
     def _onShowOhlcChanged(self, sender=None, appData=None):
         self.tradeSignalRenderer.setActiveOhlcVisible(bool(appData))
+
+    def _onPoolItemDroppedOnPanel(self, panelId, poolItemId):
+        item = self.poolDataManager.getItem(poolItemId)
+        data = self.panelManager.addPoolItemToPanel(panelId, item)
+        if data is None:
+            self._setStatusText(f"Pool Drop: item not added ({poolItemId})")
+            return
+        self.leftMenuPanel.refresh()
+        self.poolPanel.refresh()
+        self.panelManagerWindow.sync()
+        self._setStatusText(f"Pool Drop: {data.name} -> panel {panelId}")
 
     def _onReadSrcParams(self, sender=None, appData=None):
         params = self.panelManager.readPanelPlotParams()

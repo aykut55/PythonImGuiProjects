@@ -13,6 +13,7 @@ class PoolPanel:
 
     TAG = "pool_panel_window"
     TREE_CONTAINER = "pool_panel_tree_container"
+    PAYLOAD_TYPE = "pool_item"
 
     def __init__(self):
         self._visible = False
@@ -49,7 +50,13 @@ class PoolPanel:
                     for group, groupItems in groups.items():
                         with dpg.tree_node(label=group, default_open=True):
                             for item in groupItems:
-                                dpg.add_text(item.label)
+                                itemTag = f"pool_panel_item_{item.id}"
+                                dpg.add_text(item.label, tag=itemTag)
+                                with dpg.drag_payload(parent=itemTag,
+                                                      payload_type=self.PAYLOAD_TYPE,
+                                                      drag_data=item.id,
+                                                      drop_data=item.id):
+                                    dpg.add_text(f"{symbol} / {group} / {item.label}")
 
     def _onClose(self):
         self._visible = False
